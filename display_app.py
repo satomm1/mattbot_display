@@ -4,9 +4,23 @@ import tkinter as tk
 import socket
 import threading
 import time
+import os
+import pyttsx3
+import pygame
 
 class MessageDisplayApp:
     def __init__(self, root):
+
+        self.engine = pyttsx3.init()
+
+        os.environ['SDL_AUDIODRIVER'] = 'alsa'
+        os.environ['AUDIODEV'] = 'plughw:1,3'
+        pygame.mixer.init()
+
+        # Set properties (optional)
+        self.engine.setProperty('rate', 150)    # Speed of speech
+        self.engine.setProperty('volume', 1.0)  # Volume (0.0 to 1.0)
+
         self.root = root
         self.root.title("Message Display")
 
@@ -59,10 +73,21 @@ class MessageDisplayApp:
         
         self.display_default_message()
 
+        
+
     def display_message(self, message):
         print(message)
+        
+
         def add_letter_by_letter():
+            # Save the speech as an audio file
+            self.engine.save_to_file(message, "~/Desktop/output.mp3")
+            self.engine.runAndWait()
+
             with self.display_lock:
+                pygame.mixer.music.load('../Desktop/output.mp3')  # Replace with your audio file
+                pygame.mixer.music.play()
+
                 words = message.split()
                 max_chars_per_line = 28  # Adjust this value as needed
                 current_line_length = 0
