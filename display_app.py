@@ -7,18 +7,26 @@ import time
 import os
 import pyttsx3
 import pygame
+from pathlib import Path
+
+DEFAULT_MESSAGE = "Hello! I am a mobile robot.\nSay \"Hey Robot\" to talk to me."
 
 class MessageDisplayApp:
     def __init__(self, root):
 
         self.engine = pyttsx3.init()
 
+        self.home_dir = Path.home()
+        # Construct the path to the audio files
+        self.audio_dir = self.home_dir / 'Desktop' / 'audio'
+
         os.environ['SDL_AUDIODRIVER'] = 'alsa'
-        os.environ['AUDIODEV'] = 'plughw:1,3'
+        os.environ['AUDIODEV'] = 'plughw:0,3'
         pygame.mixer.init()
+        
 
         # Set properties (optional)
-        self.engine.setProperty('rate', 150)    # Speed of speech
+        self.engine.setProperty('rate', 175)    # Speed of speech
         self.engine.setProperty('volume', 1.0)  # Volume (0.0 to 1.0)
 
         self.root = root
@@ -71,9 +79,7 @@ class MessageDisplayApp:
         # Lock for synchronizing message display
         self.display_lock = threading.Lock()
         
-        self.display_default_message()
-
-        
+        self.display_default_message()      
 
     def display_message(self, message):
         print(message)
@@ -81,12 +87,18 @@ class MessageDisplayApp:
 
         def add_letter_by_letter():
             # Save the speech as an audio file
-            self.engine.save_to_file(message, "~/Desktop/output.mp3")
-            self.engine.runAndWait()
+            # self.engine.save_to_file(message, "~/Desktop/output.mp3")
+            # self.engine.runAndWait()
+            # time.sleep(1)
 
             with self.display_lock:
-                pygame.mixer.music.load('../Desktop/output.mp3')  # Replace with your audio file
-                pygame.mixer.music.play()
+
+                if message == DEFAULT_MESSAGE:
+                    pygame.mixer.music.load(self.audio_dir / 'default.mp3')  # Replace with your audio file
+                    pygame.mixer.music.play()
+                elif message != "Listening..." and message != "No speech detected.":
+                    pygame.mixer.music.load('audio/response.mp3')  # Replace with your audio file
+                    pygame.mixer.music.play()
 
                 words = message.split()
                 max_chars_per_line = 28  # Adjust this value as needed
@@ -101,7 +113,7 @@ class MessageDisplayApp:
                         self.text_widget.insert(tk.END, letter)
                         self.text_widget.see(tk.END)  # Scroll to the end
                         self.text_widget.update_idletasks()  # Update the text widget
-                        time.sleep(0.025)  # Delay between each letter
+                        time.sleep(0.075)  # Delay between each letter
                     self.text_widget.insert(tk.END, " ")  # Add a space after each word
                 self.text_widget.insert(tk.END, "\n\n\n")
         # Clear the text box before displaying the new message
@@ -145,7 +157,7 @@ class MessageDisplayApp:
         self.root.quit()
 
     def display_default_message(self):
-        self.display_message("Hello! I am a mobile robot.\nSay \"Hey Robot\" to talk to me.")
+        self.display_message(DEFAULT_MESSAGE)
         
 if __name__ == "__main__":
     root = tk.Tk()
