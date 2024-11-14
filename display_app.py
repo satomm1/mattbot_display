@@ -8,8 +8,10 @@ import os
 import pyttsx3
 import pygame
 from pathlib import Path
+from helvetica import helvetica_widths
 
 DEFAULT_MESSAGE = "Hello! I am a mobile robot.\nSay \"Hey Robot\" to talk to me."
+CHARACTER_WIDTH = 16
 
 class MessageDisplayApp:
     def __init__(self, root):
@@ -21,7 +23,7 @@ class MessageDisplayApp:
         self.audio_dir = self.home_dir / 'Desktop' / 'audio'
 
         os.environ['SDL_AUDIODRIVER'] = 'alsa'
-        os.environ['AUDIODEV'] = 'plughw:0,3'
+        os.environ['AUDIODEV'] = 'plughw:1,3'
         pygame.mixer.init()
         
 
@@ -81,6 +83,16 @@ class MessageDisplayApp:
         
         self.display_default_message()      
 
+    def get_word_length(self, word):
+        # Calculate the length of a word in characters
+        length = 0
+        for letter in word:
+            if letter in helvetica_widths:
+                length += helvetica_widths[letter]
+            else:
+                length += 0.5
+        return length
+
     def display_message(self, message):
         print(message)
         
@@ -97,18 +109,19 @@ class MessageDisplayApp:
                     pygame.mixer.music.load(self.audio_dir / 'default.mp3')  # Replace with your audio file
                     pygame.mixer.music.play()
                 elif message != "Listening..." and message != "No speech detected.":
-                    pygame.mixer.music.load('audio/response.mp3')  # Replace with your audio file
+                    pygame.mixer.music.load(self.audio_dir / 'response.mp3')  # Replace with your audio file
                     pygame.mixer.music.play()
 
                 words = message.split()
-                max_chars_per_line = 28  # Adjust this value as needed
+                # max_chars_per_line = 28  # Adjust this value as needed
+                max_chars_per_line = CHARACTER_WIDTH
                 current_line_length = 0
                 for word in words:
-                    word_length = len(word)
+                    word_length = self.get_word_length(word)
                     if current_line_length + word_length > max_chars_per_line:
                         self.text_widget.insert(tk.END, "\n")
                         current_line_length = 0
-                    current_line_length += word_length
+                    current_line_length += word_length + 0.5  # Add 0.5 for the space
                     for letter in word:
                         self.text_widget.insert(tk.END, letter)
                         self.text_widget.see(tk.END)  # Scroll to the end
@@ -127,11 +140,13 @@ class MessageDisplayApp:
 
     def yes_action(self):
         # Action for Yes button
-        self.display_message("Yes button clicked")
+        # self.display_message("Yes button clicked")
+        pass
 
     def no_action(self):
         # Action for No button
-        self.display_message("No button clicked")
+        # self.display_message("No button clicked")
+        pass
 
     def socket_server(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -141,6 +141,7 @@
   ('glob', '/usr/lib/python3.8/glob.py', 'PYMODULE'),
   ('gzip', '/usr/lib/python3.8/gzip.py', 'PYMODULE'),
   ('hashlib', '/usr/lib/python3.8/hashlib.py', 'PYMODULE'),
+  ('helvetica', '/home/jetson/mattbot_display/helvetica.py', 'PYMODULE'),
   ('hmac', '/usr/lib/python3.8/hmac.py', 'PYMODULE'),
   ('html', '/usr/lib/python3.8/html/__init__.py', 'PYMODULE'),
   ('html.entities', '/usr/lib/python3.8/html/entities.py', 'PYMODULE'),
