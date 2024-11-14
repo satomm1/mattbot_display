@@ -8,9 +8,11 @@ This will print messages sent to localhost:65432 to the screen.
 
 To create the executable, run:
 ```
-pyinstaller --onefile display_app.py
+pyinstaller display_app.spec
 ```
-The executable will be located at `/dist/display_app`.
+The executable will be located at `/dist/display_app`. Copy the executable to the Desktop.
+
+The expected file structure for audio is `~/Desktop/audio/`. You should move `default.mp3` to this directory.
 
 To use the speakers, you will need to install some python packages/dependencies:
 ```
