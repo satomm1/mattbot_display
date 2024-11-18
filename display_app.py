@@ -108,7 +108,7 @@ class MessageDisplayApp:
                 if message == DEFAULT_MESSAGE:
                     pygame.mixer.music.load(self.audio_dir / 'default.mp3')  # Replace with your audio file
                     pygame.mixer.music.play()
-                elif message != "Listening..." and message != "No speech detected.":
+                elif message != "Listening..." and message != "No speech detected." and message != "Processing...":
                     pygame.mixer.music.load(self.audio_dir / 'response.mp3')  # Replace with your audio file
                     pygame.mixer.music.play()
 
@@ -126,9 +126,16 @@ class MessageDisplayApp:
                         self.text_widget.insert(tk.END, letter)
                         self.text_widget.see(tk.END)  # Scroll to the end
                         self.text_widget.update_idletasks()  # Update the text widget
-                        time.sleep(0.075)  # Delay between each letter
+                        if message == "Listening..." or message == "No speech detected." or message == "Processing...":
+                            pass
+                        else:
+                            time.sleep(0.075)  # Delay between each letter
                     self.text_widget.insert(tk.END, " ")  # Add a space after each word
-                self.text_widget.insert(tk.END, "\n\n\n")
+
+                if message != "Listening...":
+                    self.text_widget.insert(tk.END, "\n\n\n")
+                else:
+                    self.text_widget.insert(tk.END, " ")
         # Clear the text box before displaying the new message
         # self.clear_text()
         
