@@ -17,6 +17,8 @@ The expected file structure for audio is `~/Desktop/audio/`. You should move `de
 To use the speakers, you will need to install some python packages/dependencies:
 ```
 sudo apt update
+pip3 install pygame
+pip3 install pyinstaller
 ...
 
 ```

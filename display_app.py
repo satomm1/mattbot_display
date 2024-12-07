@@ -5,7 +5,7 @@ import socket
 import threading
 import time
 import os
-import pyttsx3
+# import pyttsx3
 import pygame
 from pathlib import Path
 from helvetica import helvetica_widths
@@ -16,20 +16,13 @@ CHARACTER_WIDTH = 16
 class MessageDisplayApp:
     def __init__(self, root):
 
-        self.engine = pyttsx3.init()
-
         self.home_dir = Path.home()
         # Construct the path to the audio files
         self.audio_dir = self.home_dir / 'Desktop' / 'audio'
 
         os.environ['SDL_AUDIODRIVER'] = 'alsa'
-        os.environ['AUDIODEV'] = 'plughw:1,3'
+        os.environ['AUDIODEV'] = 'plughw:0,3'  # Change this line for your specific hardware!
         pygame.mixer.init()
-        
-
-        # Set properties (optional)
-        self.engine.setProperty('rate', 175)    # Speed of speech
-        self.engine.setProperty('volume', 1.0)  # Volume (0.0 to 1.0)
 
         self.root = root
         self.root.title("Message Display")
