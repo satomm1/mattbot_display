@@ -5,7 +5,7 @@ import socket
 import threading
 import time
 import os
-# import pyttsx3
+import requests
 import pygame
 from pathlib import Path
 from helvetica import helvetica_widths
@@ -14,14 +14,16 @@ DEFAULT_MESSAGE = "Hello! I am a mobile robot.\nSay \"Hey Robot\" to talk to me.
 CHARACTER_WIDTH = 16
 
 class MessageDisplayApp:
-    def __init__(self, root):
+    def __init__(self, root, url='http://127.0.0.1:5000/gemini'):
+
+        self.url = url
 
         self.home_dir = Path.home()
         # Construct the path to the audio files
         self.audio_dir = self.home_dir / 'Desktop' / 'audio'
 
         os.environ['SDL_AUDIODRIVER'] = 'alsa'
-        os.environ['AUDIODEV'] = 'plughw:0,3'  # Change this line for your specific hardware!
+        os.environ['AUDIODEV'] = 'plughw:2,3'  # Change this line for your specific hardware!
         pygame.mixer.init()
 
         self.root = root
@@ -47,15 +49,15 @@ class MessageDisplayApp:
         self.root.grid_columnconfigure(3, weight=1)
 
 
-        # Add Yes, No, Clear, and Exit buttons
+        # Add Chat, Goal, Clear, and Exit buttons
         self.clear_button = tk.Button(root, text="Clear", command=self.clear_text, bg='white', fg='black', font=("Helvetica", 16))
         self.clear_button.grid(row=0, column=0, padx=20, pady=10)
 
-        self.yes_button = tk.Button(root, text="Yes", command=self.yes_action, bg='white', fg='black', font=("Helvetica", 16))
-        self.yes_button.grid(row=0, column=1, padx=20, pady=10)
+        self.chat_button = tk.Button(root, text="Chat", command=self.chat_action, bg='white', fg='black', font=("Helvetica", 16))
+        self.chat_button.grid(row=0, column=1, padx=20, pady=10)
 
-        self.no_button = tk.Button(root, text="No", command=self.no_action, bg='white', fg='black', font=("Helvetica", 16))
-        self.no_button.grid(row=0, column=2, padx=20, pady=10)        
+        self.goal_button = tk.Button(root, text="Set Goal", command=self.goal_action, bg='white', fg='black', font=("Helvetica", 16))
+        self.goal_button.grid(row=0, column=2, padx=20, pady=10)        
 
         self.exit_button = tk.Button(root, text="Exit", command=self.exit_application, bg='white', fg='black', font=("Helvetica", 16))
         self.exit_button.grid(row=0, column=3, padx=20, pady=10)
@@ -73,7 +75,16 @@ class MessageDisplayApp:
 
         # Lock for synchronizing message display
         self.display_lock = threading.Lock()
-        
+
+        # Set mode to chat by default
+        self.chat_button.config(relief=tk.SUNKEN, bg='darkgrey', font=("Helvetica", 20))
+        data = {'query_type': 'set_mode', 'query': 'chat'}
+        try:
+            response = requests.post(self.url, json=data)
+        except:
+            pass
+
+        # Display the default message
         self.display_default_message()      
 
     def get_word_length(self, word):
@@ -89,12 +100,7 @@ class MessageDisplayApp:
     def display_message(self, message):
         print(message)
         
-
         def add_letter_by_letter():
-            # Save the speech as an audio file
-            # self.engine.save_to_file(message, "~/Desktop/output.mp3")
-            # self.engine.runAndWait()
-            # time.sleep(1)
 
             with self.display_lock:
 
@@ -129,8 +135,6 @@ class MessageDisplayApp:
                     self.text_widget.insert(tk.END, "\n\n\n")
                 else:
                     self.text_widget.insert(tk.END, " ")
-        # Clear the text box before displaying the new message
-        # self.clear_text()
         
         threading.Thread(target=add_letter_by_letter).start()
 
@@ -138,15 +142,24 @@ class MessageDisplayApp:
         self.text_widget.delete(1.0, tk.END)
         self.display_default_message()
 
-    def yes_action(self):
-        # Action for Yes button
-        # self.display_message("Yes button clicked")
-        pass
+    def chat_action(self):
+        # Change the appearance of the buttons to indicate the current mode
+        self.chat_button.config(relief=tk.SUNKEN, bg='darkgrey', font=("Helvetica", 20))
+        self.goal_button.config(relief=tk.RAISED, bg='white', font=("Helvetica", 16))
+        data = {'query_type': 'set_mode', 'query': 'chat'}
+        try:
+            response = requests.post(self.url, json=data)
+        except:
+            pass
 
-    def no_action(self):
-        # Action for No button
-        # self.display_message("No button clicked")
-        pass
+    def goal_action(self):
+        self.goal_button.config(relief=tk.SUNKEN, bg='darkgrey', font=("Helvetica", 20))
+        self.chat_button.config(relief=tk.RAISED, bg='white', font=("Helvetica", 16))
+        data = {'query_type': 'set_mode', 'query': 'set_goal'}
+        try:
+            response = requests.post(self.url, json=data)
+        except:
+            pass
 
     def socket_server(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
