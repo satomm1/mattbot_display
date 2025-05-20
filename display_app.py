@@ -18,6 +18,8 @@ class MessageDisplayApp:
 
         self.url = url
 
+        self.name = ""
+
         self.home_dir = Path.home()
         # Construct the path to the audio files
         self.audio_dir = self.home_dir / 'Desktop' / 'audio'
@@ -174,7 +176,7 @@ class MessageDisplayApp:
     def picture_action(self):
         self.picture_button.config(relief=tk.SUNKEN, bg='darkgrey', font=("Helvetica", 20))
         self.chat_button.config(relief=tk.RAISED, bg='white', font=("Helvetica", 16))
-        data = {'query_type': 'set_mode', 'query': 'take_picture'}
+        data = {'query_type': 'take_picture', 'query': 'take_picture'}
         try:
             response = requests.post(self.url, json=data)
         except:
@@ -205,7 +207,7 @@ class MessageDisplayApp:
 
 
         self.text_widget.delete(1.0, tk.END)
-        self.display_message_no_delay("\n\nPlease Type Your First Name\nBelow and Press Enter\n\n")
+        self.display_message_no_delay("\n\nPlease Type Your First and\nLast Name Below and Press Enter\n\n")
 
         # Create a frame for the input and submit button
         input_frame = tk.Frame(self.root, bg='black')
@@ -231,20 +233,18 @@ class MessageDisplayApp:
 
     def process_first_name(self):
         user_input = self.user_input.get()
-        print(f"First name: {user_input}")
+        self.name = user_input
+        print(f"Name: {self.name}")
         self.user_input.delete(0, tk.END)  # Clear the entry field
         self.text_widget.delete(1.0, tk.END)
 
-        # Now get last name
-        self.display_message_no_delay("\n\nPlease Type Your Last Name\nBelow and Press Enter\n\n")
-        self.user_input.bind('<Return>', lambda event: self.process_last_name())
-
-    def process_last_name(self):
-        user_input = self.user_input.get()
-        print(f"Last name: {user_input}")
-        self.user_input.delete(0, tk.END)
-
         self.display_message_no_delay("\n\nYour name and picture have been saved!\n\n")
+
+        data = {'query_type': 'set_name', 'query': self.name}
+        try:
+            response = requests.post(self.url, json=data)
+        except:
+            pass
 
         # Remove the input frame
         self.user_input.grid_forget()
@@ -263,9 +263,15 @@ class MessageDisplayApp:
 
         # Reset display to default after a short delay
         time.sleep(2)
-        self.clear_text()
+        self.clear_text()       
 
     def cancel_button_action(self):
+
+        data = {'query_type': 'cancel_picture', 'query': 'cancel_picture'}
+        try:
+            response = requests.post(self.url, json=data)
+        except:
+            pass
 
         # Remove the input frame
         self.user_input.grid_forget()
