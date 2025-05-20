@@ -44,9 +44,10 @@ class MessageDisplayApp:
 
         # Configure grid weights for the button row
         self.root.grid_columnconfigure(0, weight=1)
-        self.root.grid_columnconfigure(1, weight=2)
-        self.root.grid_columnconfigure(2, weight=2)
+        self.root.grid_columnconfigure(1, weight=1)
+        self.root.grid_columnconfigure(2, weight=1)
         self.root.grid_columnconfigure(3, weight=1)
+        self.root.grid_columnconfigure(4, weight=1)
 
 
         # Add Chat, Goal, Clear, and Exit buttons
@@ -57,16 +58,19 @@ class MessageDisplayApp:
         self.chat_button.grid(row=0, column=1, padx=20, pady=10)
 
         self.goal_button = tk.Button(root, text="Set Goal", command=self.goal_action, bg='white', fg='black', font=("Helvetica", 16))
-        self.goal_button.grid(row=0, column=2, padx=20, pady=10)        
+        self.goal_button.grid(row=0, column=2, padx=20, pady=10)      
+
+        self.picture_button = tk.Button(root, text="Take Picture", command=self.picture_action, bg='white', fg='black', font=("Helvetica", 16))
+        self.picture_button.grid(row=0, column=3, padx=20, pady=10)
 
         self.exit_button = tk.Button(root, text="Exit", command=self.exit_application, bg='white', fg='black', font=("Helvetica", 16))
-        self.exit_button.grid(row=0, column=3, padx=20, pady=10)
+        self.exit_button.grid(row=0, column=4, padx=20, pady=10)
         
         self.clear_button.focus_set()
         
         # The sticky parameter makes the widget fill the cell
         self.text_widget = tk.Text(root, bg='black', fg='white', insertbackground='white', font=("Helvetica", 48))
-        self.text_widget.grid(row=1, column=0, columnspan=4, sticky='nsew', padx=10, pady=10)    
+        self.text_widget.grid(row=1, column=0, columnspan=5, sticky='nsew', padx=10, pady=10)    
 
         # Set up a socket server in a separate thread
         self.socket_thread = threading.Thread(target=self.socket_server)
@@ -138,6 +142,12 @@ class MessageDisplayApp:
         
         threading.Thread(target=add_letter_by_letter).start()
 
+    def display_message_no_delay(self, message):
+        with self.display_lock:
+            self.text_widget.insert(tk.END, message)
+            self.text_widget.see(tk.END)
+            self.text_widget.update_idletasks()  # Update the text widget
+
     def clear_text(self):
         self.text_widget.delete(1.0, tk.END)
         self.display_default_message()
@@ -160,6 +170,120 @@ class MessageDisplayApp:
             response = requests.post(self.url, json=data)
         except:
             pass
+
+    def picture_action(self):
+        self.picture_button.config(relief=tk.SUNKEN, bg='darkgrey', font=("Helvetica", 20))
+        self.chat_button.config(relief=tk.RAISED, bg='white', font=("Helvetica", 16))
+        data = {'query_type': 'set_mode', 'query': 'take_picture'}
+        try:
+            response = requests.post(self.url, json=data)
+        except:
+            pass
+
+        # # Reset the button after a delay
+        # def reset_button():
+        #     self.picture_button.config(relief=tk.RAISED, bg='white', font=("Helvetica", 16))
+            
+        # Display countdown message
+        self.text_widget.delete(1.0, tk.END)
+        self.display_message_no_delay("Please look at the camera!\n\n")
+        time.sleep(1)
+
+        # Countdown from 5
+        for i in range(5, 0, -1):
+            self.display_message_no_delay(f"{i} ... ")
+            time.sleep(1)
+
+        # Display the message "Cheese!" for 2 seconds
+        self.display_message_no_delay(" Cheese!\n\n")
+        time.sleep(2)
+
+        self.display_message_no_delay("Your picture has been taken!\n\n")
+        time.sleep(1)
+        # Reset the picture button after operation
+        self.picture_button.config(relief=tk.RAISED, bg='white', font=("Helvetica", 16))
+
+
+        self.text_widget.delete(1.0, tk.END)
+        self.display_message_no_delay("\n\nPlease Type Your First Name\nBelow and Press Enter\n\n")
+
+        # Create a frame for the input and submit button
+        input_frame = tk.Frame(self.root, bg='black')
+        input_frame.grid(row=2, column=0, columnspan=5, sticky='ew', padx=10, pady=10)
+
+        # Configure the frame's columns
+        input_frame.grid_columnconfigure(0, weight=3)
+        input_frame.grid_columnconfigure(1, weight=1)
+
+        # Create entry field for user input
+        self.user_input = tk.Entry(input_frame, font=("Helvetica", 32), bg='white', fg='black')
+        self.user_input.grid(row=0, column=0, padx=(0, 10), sticky='ew')
+
+        # Create a Cancel button
+        self.cancel_button = tk.Button(input_frame, text="Cancel", command=self.cancel_button_action, bg='white', fg='black', font=("Helvetica", 16))
+        self.cancel_button.grid(row=0, column=1, padx=(10, 0), sticky='ew')
+        
+        self.user_input.focus_set()
+        self.cancel_button.focus_set()
+
+        # Bind Enter key to submit
+        self.user_input.bind('<Return>', lambda event: self.process_first_name())
+
+    def process_first_name(self):
+        user_input = self.user_input.get()
+        print(f"First name: {user_input}")
+        self.user_input.delete(0, tk.END)  # Clear the entry field
+        self.text_widget.delete(1.0, tk.END)
+
+        # Now get last name
+        self.display_message_no_delay("\n\nPlease Type Your Last Name\nBelow and Press Enter\n\n")
+        self.user_input.bind('<Return>', lambda event: self.process_last_name())
+
+    def process_last_name(self):
+        user_input = self.user_input.get()
+        print(f"Last name: {user_input}")
+        self.user_input.delete(0, tk.END)
+
+        self.display_message_no_delay("\n\nYour name and picture have been saved!\n\n")
+
+        # Remove the input frame
+        self.user_input.grid_forget()
+        self.user_input.destroy()
+
+        self.cancel_button.grid_forget()
+        self.cancel_button.destroy()
+
+        # Clean up the input frame
+        for widget in self.root.grid_slaves(row=2):
+            widget.grid_forget()
+            widget.destroy()
+
+        # Reset the grid configuration
+        self.root.grid_rowconfigure(2, weight=0)
+
+        # Reset display to default after a short delay
+        time.sleep(2)
+        self.clear_text()
+
+    def cancel_button_action(self):
+
+        # Remove the input frame
+        self.user_input.grid_forget()
+        self.user_input.destroy()
+
+        self.cancel_button.grid_forget()
+        self.cancel_button.destroy()
+
+        # Hide the input frame
+        for widget in self.root.grid_slaves(row=2):
+            widget.grid_forget()
+            widget.destroy()
+
+        # Reset the grid configuration
+        self.root.grid_rowconfigure(2, weight=0)
+
+        # Reset display to default
+        self.clear_text()
 
     def socket_server(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
