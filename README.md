@@ -4,7 +4,7 @@ This repo provides the code for connecting the mobile robot to the touch screen 
 ```
 python3 display_app.py
 ```
-This will print messages sent to localhost:65432 to the screen.
+This will print messages sent to localhost:65432 to the screen. You may need to adjust the line `os.environ['AUDIODEV'] = 'plughw:<card number>,<device number>'` for your specific device/card number for the sound to work. I recommend adjusting the card number between 0 and 2.
 
 To create the executable, run:
 ```

@@ -28,7 +28,7 @@ missing module named urllib.unquote_plus - imported by urllib (conditional), req
 missing module named urllib.quote_plus - imported by urllib (conditional), requests.compat (conditional)
 missing module named urllib.unquote - imported by urllib (conditional), requests.compat (conditional)
 missing module named urllib.quote - imported by urllib (conditional), requests.compat (conditional)
-missing module named nt - imported by os (delayed, conditional, optional), ntpath (optional), shutil (conditional), importlib._bootstrap_external (conditional), pathlib (conditional), ctypes (delayed, conditional)
+missing module named nt - imported by shutil (conditional), importlib._bootstrap_external (conditional), ntpath (optional), pathlib (conditional), os (delayed, conditional, optional), ctypes (delayed, conditional)
 missing module named _manylinux - imported by packaging._manylinux (delayed, optional)
 missing module named StringIO - imported by six (conditional), simplejson.compat (conditional, optional), requests.compat (conditional), numpy.lib.utils (delayed, conditional), numpy.lib.format (delayed, conditional), numpy.testing._private.utils (conditional), pkg_resources._vendor.six (conditional)
 missing module named 'ctypes.macholib' - imported by ctypes.util (conditional)
