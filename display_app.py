@@ -1,10 +1,12 @@
 #!/usr/bin/python3
+import os
+os.environ['TK_ENABLE_PLATFORM_GL'] = '0'  # Disable OpenGL acceleration
+os.environ["SDL_RENDERER_DRIVER"] = "software"  # Use software rendering for compatibility
 
 import tkinter as tk
 import socket
 import threading
 import time
-import os
 import requests
 import pygame
 from pathlib import Path
@@ -29,6 +31,8 @@ class MessageDisplayApp:
         pygame.mixer.init()
 
         self.root = root
+        # Reduce update frequency to reduce GPU/CPU usage
+        self.root.after(100, lambda: None)  # This line is to reduce the update frequency of the GUI
         self.root.title("Message Display")
 
         # Set the application to full screen
@@ -121,21 +125,26 @@ class MessageDisplayApp:
                 # max_chars_per_line = 28  # Adjust this value as needed
                 max_chars_per_line = CHARACTER_WIDTH
                 current_line_length = 0
+                text_to_display = ""
                 for word in words:
                     word_length = self.get_word_length(word)
                     if current_line_length + word_length > max_chars_per_line:
-                        self.text_widget.insert(tk.END, "\n")
+                        text_to_display += "\n"
                         current_line_length = 0
                     current_line_length += word_length + 0.5  # Add 0.5 for the space
-                    for letter in word:
-                        self.text_widget.insert(tk.END, letter)
-                        self.text_widget.see(tk.END)  # Scroll to the end
-                        self.text_widget.update_idletasks()  # Update the text widget
-                        if message == "Listening..." or message == "No speech detected." or message == "Processing...":
-                            pass
-                        else:
-                            time.sleep(0.075)  # Delay between each letter
-                    self.text_widget.insert(tk.END, " ")  # Add a space after each word
+                    # for letter in word:
+                        
+                        # self.text_widget.insert(tk.END, letter)
+                        # self.text_widget.see(tk.END)  # Scroll to the end
+                        # self.text_widget.update_idletasks()  # Update the text widget
+                        # if message == "Listening..." or message == "No speech detected." or message == "Processing...":
+                        #     pass
+                        # else:
+                        #     time.sleep(0.075)  # Delay between each letter
+                    text_to_display += word + " "
+                self.text_widget.insert(tk.END, text_to_display.strip())
+                self.text_widget.see(tk.END)  # Scroll to the end
+                self.text_widget.update_idletasks()  # Update the text widget
 
                 if message != "Listening...":
                     self.text_widget.insert(tk.END, "\n\n\n")
@@ -318,6 +327,7 @@ class MessageDisplayApp:
         self.display_message(DEFAULT_MESSAGE)
         
 if __name__ == "__main__":
+    
     root = tk.Tk()
     app = MessageDisplayApp(root)
     root.mainloop()
