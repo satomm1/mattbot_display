@@ -27,7 +27,7 @@ class MessageDisplayApp:
         self.audio_dir = self.home_dir / 'Desktop' / 'audio'
 
         os.environ['SDL_AUDIODRIVER'] = 'alsa'
-        os.environ['AUDIODEV'] = 'plughw:2,3'  # Change this line for your specific hardware!
+        os.environ['AUDIODEV'] = 'plughw:1,3'  # Change this line for your specific hardware!
         pygame.mixer.init()
 
         self.root = root
@@ -154,8 +154,16 @@ class MessageDisplayApp:
         threading.Thread(target=add_letter_by_letter).start()
 
     def display_message_no_delay(self, message):
+
+        if message == DEFAULT_MESSAGE:
+            pygame.mixer.music.load(self.audio_dir / 'default.mp3')  # Replace with your audio file
+            pygame.mixer.music.play()
+        elif message != "Listening..." and message != "No speech detected." and message != "Processing...":
+            pygame.mixer.music.load(self.audio_dir / 'response.mp3')  # Replace with your audio file
+            pygame.mixer.music.play()
+
         with self.display_lock:
-            self.text_widget.insert(tk.END, message)
+            self.text_widget.insert(tk.END, message + "\n")
             self.text_widget.see(tk.END)
             self.text_widget.update_idletasks()  # Update the text widget
 
@@ -324,7 +332,7 @@ class MessageDisplayApp:
         self.root.quit()
 
     def display_default_message(self):
-        self.display_message(DEFAULT_MESSAGE)
+        self.display_message_no_delay(DEFAULT_MESSAGE)
         
 if __name__ == "__main__":
     
