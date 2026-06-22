@@ -1,0 +1,2 @@
+# Allow desktop user to start/restart display without SSH (installed by scripts/install.sh).
+jetson ALL=(ALL) NOPASSWD: /bin/systemctl start mattbot-display, /bin/systemctl restart mattbot-display

@@ -54,6 +54,16 @@ This copies the app to `/opt/mattbot/display`, creates a venv, and enables `matt
 
 Override env vars in `/etc/systemd/system/mattbot-display.service` or add an `EnvironmentFile=/etc/default/mattbot-display`.
 
+## Exit and desktop workflow
+
+- **Exit button** — quits the display and returns you to the desktop (service stops; it does not auto-restart on a clean exit).
+- **Shut down** — use the normal desktop power menu after pressing Exit.
+- **Start display again** — double-click **Start-Mattbot-Display.sh** on the desktop (most reliable), or **Mattbot Display** if your file manager supports `.desktop` launchers.
+
+Run `scripts/setup_desktop_shortcut.sh` if the shortcut opens in a text editor (marks the `.desktop` file as trusted on GNOME).
+
+The desktop shortcut uses passwordless sudo for `systemctl start/restart mattbot-display` only (see `deploy/mattbot-display-sudoers`).
+
 ## GPU tips
 
 - `TK_ENABLE_PLATFORM_GL=0` is set in the app to avoid OpenGL in Tk.

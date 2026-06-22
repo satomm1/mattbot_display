@@ -165,7 +165,7 @@ class MessageDisplayApp:
         threading.Thread(target=do_post, daemon=True).start()
 
     def exit_application(self):
-        log.info('Exit')
+        log.info('Exit to desktop')
         self._running = False
         self._abort_picture()
         if self._socket:
@@ -175,6 +175,11 @@ class MessageDisplayApp:
                 pass
         if self._audio_proc and self._audio_proc.poll() is None:
             self._audio_proc.terminate()
+        try:
+            self.root.attributes('-fullscreen', False)
+            self.root.update_idletasks()
+        except tk.TclError:
+            pass
         self.root.destroy()
 
     def _play_sound(self, path):
