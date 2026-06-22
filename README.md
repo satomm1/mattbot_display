@@ -29,8 +29,29 @@ Environment variables (defaults shown):
 | `MATTBOT_SOCKET_PORT` | `65432` |
 | `MATTBOT_AUDIO_DIR` | `~/Desktop/audio` |
 | `MATTBOT_ALSA_DEVICE` | auto-detect HDMI via `aplay -l` |
+| `MATTBOT_HOST_SERVICE_URL` | `http://127.0.0.1:8081` |
+| `MATTBOT_LAUNCHER_URL` | `http://127.0.0.1:8080` |
+| `MATTBOT_ROS_START_PATH` | `/start?kaist=true` |
+| `MATTBOT_ROBOT_POLL_MS` | `2000` |
 
 Set `MATTBOT_ALSA_DEVICE` (e.g. `plughw:2,3`) to override auto-detection. By default the app picks the first HDMI output from `aplay -l`.
+
+## Robot start/stop
+
+The toolbar **Start Robot** / **Stop Robot** button controls ROS via existing host services:
+
+| Service | Port | Role |
+|---------|------|------|
+| `robot-host-service` (`/opt/robot/host_service.py`) | 8081 | Starts Docker if needed |
+| `startup_script.py` (inside container) | 8080 | Starts/stops `roslaunch mattbot_bringup kaist.launch` |
+
+**Prerequisites:** `robot-host-service` running (`curl http://127.0.0.1:8081/status`), Docker image `ghcr.io/satomm1/ml_ros:latest`.
+
+- **Start Docker** — starts the ROS Docker container (when Docker is not running)
+- **Start Robot** — starts `kaist.launch` (when Docker is up, ROS is down)
+- **Stop Robot** — stops ROS only; Docker keeps running
+
+Change launch file later via `MATTBOT_ROS_START_PATH` (e.g. `/start?social=true`).
 
 ## Socket protocol
 

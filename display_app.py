@@ -8,6 +8,7 @@ import re
 import socket
 import subprocess
 import threading
+import time
 import tkinter as tk
 import urllib.error
 import urllib.request
@@ -22,6 +23,10 @@ log = logging.getLogger(__name__)
 BACKEND_URL = os.environ.get('MATTBOT_BACKEND_URL', 'http://127.0.0.1:5000/gemini')
 SOCKET_PORT = int(os.environ.get('MATTBOT_SOCKET_PORT', '65432'))
 AUDIO_DIR = Path(os.environ.get('MATTBOT_AUDIO_DIR', Path.home() / 'Desktop' / 'audio'))
+HOST_SERVICE_URL = os.environ.get('MATTBOT_HOST_SERVICE_URL', 'http://127.0.0.1:8081')
+LAUNCHER_URL = os.environ.get('MATTBOT_LAUNCHER_URL', 'http://127.0.0.1:8080')
+ROS_START_PATH = os.environ.get('MATTBOT_ROS_START_PATH', '/start?kaist=true')
+ROBOT_POLL_MS = int(os.environ.get('MATTBOT_ROBOT_POLL_MS', '2000'))
 
 
 def _detect_hdmi_alsa_device():
@@ -93,6 +98,10 @@ class MessageDisplayApp:
         self._msg_queue = deque(maxlen=100)
         self._msg_drain_scheduled = False
         self._touch_targets = []
+        self._robot_docker_running = False
+        self._robot_ros_running = False
+        self._robot_busy = False
+        self._robot_busy_action = None
 
         root.title('Message Display')
         root.attributes('-fullscreen', True)
@@ -100,31 +109,36 @@ class MessageDisplayApp:
         root.bind('<Escape>', lambda e: root.attributes('-fullscreen', False))
         root.protocol('WM_DELETE_WINDOW', self.exit_application)
         root.grid_rowconfigure(1, weight=1)
-        toolbar_cols = 5 if SHOW_PICTURE_BUTTON else 4
-        self._toolbar_cols = toolbar_cols
-        for i in range(toolbar_cols):
+        self._toolbar_cols = 6 if SHOW_PICTURE_BUTTON else 5
+        for i in range(self._toolbar_cols):
             root.grid_columnconfigure(i, weight=1)
 
         btn_kw = dict(bg='white', fg='black', font=('Helvetica', 16))
         self.toolbar = tk.Frame(root, bg='black')
-        self.toolbar.grid(row=0, column=0, columnspan=toolbar_cols, sticky='ew')
-        for i in range(toolbar_cols):
+        self.toolbar.grid(row=0, column=0, columnspan=self._toolbar_cols, sticky='ew')
+        for i in range(self._toolbar_cols):
             self.toolbar.grid_columnconfigure(i, weight=1)
 
-        self.clear_button = self._make_button('Clear', self.clear_text, 0, **btn_kw)
-        self.chat_button = self._make_button('Chat', self.chat_action, 1, **btn_kw)
-        self.goal_button = self._make_button('Set Goal', self.goal_action, 2, **btn_kw)
+        col = 0
+        self.clear_button = self._make_button('Clear', self.clear_text, col, **btn_kw)
+        col += 1
+        self.chat_button = self._make_button('Chat', self.chat_action, col, **btn_kw)
+        col += 1
+        self.goal_button = self._make_button('Set Goal', self.goal_action, col, **btn_kw)
+        col += 1
         if SHOW_PICTURE_BUTTON:
-            self.picture_button = self._make_button('Take Picture', self.picture_action, 3, **btn_kw)
-            self.exit_button = self._make_button('Exit', self.exit_application, 4, **btn_kw)
+            self.picture_button = self._make_button('Take Picture', self.picture_action, col, **btn_kw)
+            col += 1
         else:
             self.picture_button = None
-            self.exit_button = self._make_button('Exit', self.exit_application, 3, **btn_kw)
+        self.robot_button = self._make_button('Start Docker', self.robot_toggle_action, col, **btn_kw)
+        col += 1
+        self.exit_button = self._make_button('Exit', self.exit_application, col, **btn_kw)
 
         self.text_widget = tk.Text(root, bg='black', fg='white', insertbackground='white',
                                    font=('Helvetica', 40), state='disabled', cursor='arrow',
                                    takefocus=0)
-        self.text_widget.grid(row=1, column=0, columnspan=toolbar_cols, sticky='nsew', padx=10, pady=10)
+        self.text_widget.grid(row=1, column=0, columnspan=self._toolbar_cols, sticky='nsew', padx=10, pady=10)
         self.toolbar.lift()
 
         for seq in ('<Button-1>', '<ButtonRelease-1>', '<1>'):
@@ -135,6 +149,7 @@ class MessageDisplayApp:
         self._style_mode_btn(self.chat_button, active=True)
         self._post_json({'query_type': 'set_mode', 'query': 'chat'})
         self.root.after_idle(lambda: self._enqueue_message(DEFAULT_MESSAGE))
+        self.root.after(ROBOT_POLL_MS, self._poll_robot_status)
 
     def _make_button(self, text, action, column, **kwargs):
         btn = _touch_button(self.toolbar, text, action, bind=False, **kwargs)
@@ -170,6 +185,132 @@ class MessageDisplayApp:
             except (urllib.error.URLError, OSError) as e:
                 log.warning('Backend request failed: %s', e)
         threading.Thread(target=do_post, daemon=True).start()
+
+    @staticmethod
+    def _robot_get_json(base_url, path, timeout=5, quiet=False):
+        url = base_url.rstrip('/') + path
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                return json.loads(resp.read().decode())
+        except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError) as e:
+            if not quiet:
+                log.warning('Robot GET %s failed: %s', url, e)
+            return None
+
+    @staticmethod
+    def _robot_get_text(base_url, path, timeout=5):
+        url = base_url.rstrip('/') + path
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                return True, resp.read().decode().strip()
+        except (urllib.error.URLError, OSError) as e:
+            log.warning('Robot GET %s failed: %s', url, e)
+            return False, str(e)
+
+    def _robot_update_button_label(self):
+        if self._robot_busy:
+            labels = {'docker': 'Starting Docker...', 'start': 'Starting...', 'stop': 'Stopping...'}
+            label = labels.get(self._robot_busy_action, '...')
+        elif not self._robot_docker_running:
+            label = 'Start Docker'
+        elif self._robot_ros_running:
+            label = 'Stop Robot'
+        else:
+            label = 'Start Robot'
+        self.robot_button._label.config(text=label)
+
+    def _poll_robot_status(self):
+        if self._running and not self._robot_busy:
+            threading.Thread(target=self._robot_poll_worker, daemon=True).start()
+        if self._running:
+            try:
+                self.root.after(ROBOT_POLL_MS, self._poll_robot_status)
+            except tk.TclError:
+                pass
+
+    def _robot_poll_worker(self):
+        host = self._robot_get_json(HOST_SERVICE_URL, '/status', quiet=True)
+        docker = bool(host and host.get('docker_running'))
+        launcher = self._robot_get_json(LAUNCHER_URL, '/status', quiet=True)
+        ros = bool(launcher and launcher.get('ros_running'))
+        self._schedule_ui(self._robot_set_status, docker, ros)
+
+    def _robot_set_status(self, docker, ros):
+        self._robot_docker_running = docker
+        self._robot_ros_running = ros
+        self._robot_update_button_label()
+
+    def robot_toggle_action(self):
+        if self._robot_busy:
+            return
+        if not self._robot_docker_running:
+            self._robot_busy = True
+            self._robot_busy_action = 'docker'
+            self._robot_update_button_label()
+            threading.Thread(target=self._robot_docker_start_worker, daemon=True).start()
+        elif self._robot_ros_running:
+            self._robot_busy = True
+            self._robot_busy_action = 'stop'
+            self._robot_update_button_label()
+            threading.Thread(target=self._robot_stop_worker, daemon=True).start()
+        else:
+            self._robot_busy = True
+            self._robot_busy_action = 'start'
+            self._robot_update_button_label()
+            threading.Thread(target=self._robot_ros_start_worker, daemon=True).start()
+
+    def _robot_docker_start_worker(self):
+        status = self._robot_get_json(HOST_SERVICE_URL, '/status')
+        if status is None:
+            self._robot_finish('Robot host service unavailable (port 8081).', None)
+            return
+        if status.get('docker_running'):
+            self._robot_finish('Docker is already running.', None)
+            return
+        ok, msg = self._robot_get_text(HOST_SERVICE_URL, '/docker-start', timeout=120)
+        if not ok:
+            self._robot_finish(f'Docker start failed: {msg}', None)
+            return
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if self._robot_get_json(LAUNCHER_URL, '/status', quiet=True):
+                break
+            time.sleep(0.5)
+        self._robot_finish(msg or 'Docker started.', None)
+
+    def _robot_ros_start_worker(self):
+        if self._robot_get_json(LAUNCHER_URL, '/status', quiet=True) is None:
+            self._robot_finish('Launcher unavailable. Start Docker first.', None)
+            return
+        ok, msg = self._robot_get_text(LAUNCHER_URL, ROS_START_PATH, timeout=120)
+        if not ok:
+            self._robot_finish(f'ROS start failed: {msg}', None)
+            return
+        self._robot_finish(msg or 'Robot started.', True)
+
+    def _robot_stop_worker(self):
+        ok, msg = self._robot_get_text(LAUNCHER_URL, '/stop', timeout=30)
+        if ok:
+            self._robot_finish(msg or 'Robot stopped.', False)
+        else:
+            self._robot_finish(f'Stop failed: {msg}', None)
+
+    def _robot_finish(self, message, ros_running):
+        def done():
+            self._robot_busy = False
+            self._robot_busy_action = None
+            host = self._robot_get_json(HOST_SERVICE_URL, '/status', quiet=True)
+            self._robot_docker_running = bool(host and host.get('docker_running'))
+            if ros_running is not None:
+                self._robot_ros_running = ros_running
+            else:
+                data = self._robot_get_json(LAUNCHER_URL, '/status', quiet=True)
+                self._robot_ros_running = bool(data and data.get('ros_running'))
+            if message:
+                log.info('Robot: %s', message)
+                self._append_text(f'\n{message}\n\n')
+            self._robot_update_button_label()
+        self._schedule_ui(done)
 
     def exit_application(self):
         log.info('Exit to desktop')
