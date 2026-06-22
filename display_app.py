@@ -1,341 +1,357 @@
 #!/usr/bin/python3
 import os
-os.environ['TK_ENABLE_PLATFORM_GL'] = '0'  # Disable OpenGL acceleration
-os.environ["SDL_RENDERER_DRIVER"] = "software"  # Use software rendering for compatibility
+os.environ['TK_ENABLE_PLATFORM_GL'] = '0'
 
-import tkinter as tk
+import json
+import logging
 import socket
+import subprocess
 import threading
-import time
-import requests
-import pygame
+import tkinter as tk
+import urllib.error
+import urllib.request
+from collections import deque
 from pathlib import Path
+
 from helvetica import helvetica_widths
 
-DEFAULT_MESSAGE = "Hello! I am a mobile robot.\nSay \"Hey Robot\" to talk to me."
-CHARACTER_WIDTH = 16
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+log = logging.getLogger(__name__)
+
+BACKEND_URL = os.environ.get('MATTBOT_BACKEND_URL', 'http://127.0.0.1:5000/gemini')
+SOCKET_PORT = int(os.environ.get('MATTBOT_SOCKET_PORT', '65432'))
+AUDIO_DIR = Path(os.environ.get('MATTBOT_AUDIO_DIR', Path.home() / 'Desktop' / 'audio'))
+ALSA_DEVICE = os.environ.get('MATTBOT_ALSA_DEVICE', 'plughw:1,3')
+MAX_TEXT_CHARS = 8000
+
+DEFAULT_MESSAGE = 'Hello! I am a mobile robot.\nSay "Hey Robot" to talk to me.'
+CHARACTER_WIDTH = 19
+STATUS_MESSAGES = frozenset(('Listening...', 'No speech detected.', 'Processing...'))
+
+
+def _touch_button(parent, text, action, bind=True, **kwargs):
+    bg = kwargs.get('bg', 'white')
+    fg = kwargs.get('fg', 'black')
+    font = kwargs.get('font', ('Helvetica', 16))
+    frame = tk.Frame(parent, bg=bg, highlightthickness=1, highlightbackground='grey', cursor='hand2')
+    label = tk.Label(frame, text=text, bg=bg, fg=fg, font=font, cursor='hand2')
+    label.pack(padx=16, pady=12, fill='both', expand=True)
+    frame._label = label
+    frame._touch_action = action
+    if bind:
+        for w in (frame, label):
+            for seq in ('<Button-1>', '<ButtonRelease-1>', '<1>'):
+                w.bind(seq, lambda e, a=action: (a(), 'break')[1])
+    return frame
+
 
 class MessageDisplayApp:
-    def __init__(self, root, url='http://127.0.0.1:5000/gemini'):
-
-        self.url = url
-
-        self.name = ""
-
-        self.home_dir = Path.home()
-        # Construct the path to the audio files
-        self.audio_dir = self.home_dir / 'Desktop' / 'audio'
-
-        os.environ['SDL_AUDIODRIVER'] = 'alsa'
-        os.environ['AUDIODEV'] = 'plughw:1,3'  # Change this line for your specific hardware!
-        pygame.mixer.init()
-
+    def __init__(self, root):
         self.root = root
-        # Reduce update frequency to reduce GPU/CPU usage
-        self.root.after(100, lambda: None)  # This line is to reduce the update frequency of the GUI
-        self.root.title("Message Display")
+        self.name = ''
+        self._audio_proc = None
+        self._picture_step = None
+        self._picture_after_id = None
+        self._running = True
+        self._socket = None
+        self._msg_queue = deque(maxlen=100)
+        self._msg_drain_scheduled = False
+        self._touch_targets = []
 
-        # Set the application to full screen
-        self.root.attributes("-fullscreen", True)
+        root.title('Message Display')
+        root.attributes('-fullscreen', True)
+        root.configure(bg='black')
+        root.bind('<Escape>', lambda e: root.attributes('-fullscreen', False))
+        root.protocol('WM_DELETE_WINDOW', self.exit_application)
+        root.grid_rowconfigure(1, weight=1)
+        for i in range(5):
+            root.grid_columnconfigure(i, weight=1)
 
-        # Set the background color of the root window to black
-        self.root.configure(bg='black')
+        btn_kw = dict(bg='white', fg='black', font=('Helvetica', 16))
+        self.toolbar = tk.Frame(root, bg='black')
+        self.toolbar.grid(row=0, column=0, columnspan=5, sticky='ew')
+        for i in range(5):
+            self.toolbar.grid_columnconfigure(i, weight=1)
 
-        # Binding Escape key to exit fullscreen
-        self.root.bind("<Escape>", self.exit_fullscreen)
+        self.clear_button = self._make_button('Clear', self.clear_text, 0, **btn_kw)
+        self.chat_button = self._make_button('Chat', self.chat_action, 1, **btn_kw)
+        self.goal_button = self._make_button('Set Goal', self.goal_action, 2, **btn_kw)
+        self.picture_button = self._make_button('Take Picture', self.picture_action, 3, **btn_kw)
+        self.exit_button = self._make_button('Exit', self.exit_application, 4, **btn_kw)
 
-        # Configure the grid layout        
-        self.root.grid_rowconfigure(0, weight=0)
-        self.root.grid_rowconfigure(1, weight=1)
+        self.text_widget = tk.Text(root, bg='black', fg='white', insertbackground='white',
+                                   font=('Helvetica', 40), state='disabled', cursor='arrow',
+                                   takefocus=0)
+        self.text_widget.grid(row=1, column=0, columnspan=5, sticky='nsew', padx=10, pady=10)
+        self.toolbar.lift()
 
-        # Configure grid weights for the button row
-        self.root.grid_columnconfigure(0, weight=1)
-        self.root.grid_columnconfigure(1, weight=1)
-        self.root.grid_columnconfigure(2, weight=1)
-        self.root.grid_columnconfigure(3, weight=1)
-        self.root.grid_columnconfigure(4, weight=1)
+        for seq in ('<Button-1>', '<ButtonRelease-1>', '<1>'):
+            root.bind_all(seq, self._global_touch, add='+')
 
+        threading.Thread(target=self._socket_server, daemon=True).start()
 
-        # Add Chat, Goal, Clear, and Exit buttons
-        self.clear_button = tk.Button(root, text="Clear", command=self.clear_text, bg='white', fg='black', font=("Helvetica", 16))
-        self.clear_button.grid(row=0, column=0, padx=20, pady=10)
+        self._style_mode_btn(self.chat_button, active=True)
+        self._post_json({'query_type': 'set_mode', 'query': 'chat'})
+        self.root.after_idle(lambda: self._enqueue_message(DEFAULT_MESSAGE))
 
-        self.chat_button = tk.Button(root, text="Chat", command=self.chat_action, bg='white', fg='black', font=("Helvetica", 16))
-        self.chat_button.grid(row=0, column=1, padx=20, pady=10)
+    def _make_button(self, text, action, column, **kwargs):
+        btn = _touch_button(self.toolbar, text, action, bind=False, **kwargs)
+        btn.grid(row=0, column=column, padx=20, pady=10, sticky='nsew')
+        self._touch_targets.append(btn)
+        return btn
 
-        self.goal_button = tk.Button(root, text="Set Goal", command=self.goal_action, bg='white', fg='black', font=("Helvetica", 16))
-        self.goal_button.grid(row=0, column=2, padx=20, pady=10)      
+    def _global_touch(self, event):
+        self.root.update_idletasks()
+        x, y = event.x_root, event.y_root
+        for btn in self._touch_targets:
+            if not btn.winfo_exists():
+                continue
+            bx, by = btn.winfo_rootx(), btn.winfo_rooty()
+            if bx <= x <= bx + btn.winfo_width() and by <= y <= by + btn.winfo_height():
+                log.info('Touch: %s', btn._label.cget('text'))
+                btn._touch_action()
+                return 'break'
 
-        self.picture_button = tk.Button(root, text="Take Picture", command=self.picture_action, bg='white', fg='black', font=("Helvetica", 16))
-        self.picture_button.grid(row=0, column=3, padx=20, pady=10)
+    def _style_mode_btn(self, btn, active=False):
+        bg = 'darkgrey' if active else 'white'
+        font = ('Helvetica', 20 if active else 16)
+        btn.config(bg=bg)
+        btn._label.config(bg=bg, font=font)
 
-        self.exit_button = tk.Button(root, text="Exit", command=self.exit_application, bg='white', fg='black', font=("Helvetica", 16))
-        self.exit_button.grid(row=0, column=4, padx=20, pady=10)
-        
-        self.clear_button.focus_set()
-        
-        # The sticky parameter makes the widget fill the cell
-        self.text_widget = tk.Text(root, bg='black', fg='white', insertbackground='white', font=("Helvetica", 48))
-        self.text_widget.grid(row=1, column=0, columnspan=5, sticky='nsew', padx=10, pady=10)    
-
-        # Set up a socket server in a separate thread
-        self.socket_thread = threading.Thread(target=self.socket_server)
-        self.socket_thread.daemon = True
-        self.socket_thread.start()
-
-        # Lock for synchronizing message display
-        self.display_lock = threading.Lock()
-
-        # Set mode to chat by default
-        self.chat_button.config(relief=tk.SUNKEN, bg='darkgrey', font=("Helvetica", 20))
-        data = {'query_type': 'set_mode', 'query': 'chat'}
-        try:
-            response = requests.post(self.url, json=data)
-        except:
-            pass
-
-        # Display the default message
-        self.display_default_message()      
-
-    def get_word_length(self, word):
-        # Calculate the length of a word in characters
-        length = 0
-        for letter in word:
-            if letter in helvetica_widths:
-                length += helvetica_widths[letter]
-            else:
-                length += 0.5
-        return length
-
-    def display_message(self, message):
-        print(message)
-        
-        def add_letter_by_letter():
-
-            with self.display_lock:
-
-                if message == DEFAULT_MESSAGE:
-                    pygame.mixer.music.load(self.audio_dir / 'default.mp3')  # Replace with your audio file
-                    pygame.mixer.music.play()
-                elif message != "Listening..." and message != "No speech detected." and message != "Processing...":
-                    pygame.mixer.music.load(self.audio_dir / 'response.mp3')  # Replace with your audio file
-                    pygame.mixer.music.play()
-
-                words = message.split()
-                # max_chars_per_line = 28  # Adjust this value as needed
-                max_chars_per_line = CHARACTER_WIDTH
-                current_line_length = 0
-                text_to_display = ""
-                for word in words:
-                    word_length = self.get_word_length(word)
-                    if current_line_length + word_length > max_chars_per_line:
-                        text_to_display += "\n"
-                        current_line_length = 0
-                    current_line_length += word_length + 0.5  # Add 0.5 for the space
-                    # for letter in word:
-                        
-                        # self.text_widget.insert(tk.END, letter)
-                        # self.text_widget.see(tk.END)  # Scroll to the end
-                        # self.text_widget.update_idletasks()  # Update the text widget
-                        # if message == "Listening..." or message == "No speech detected." or message == "Processing...":
-                        #     pass
-                        # else:
-                        #     time.sleep(0.075)  # Delay between each letter
-                    text_to_display += word + " "
-                self.text_widget.insert(tk.END, text_to_display.strip())
-                self.text_widget.see(tk.END)  # Scroll to the end
-                self.text_widget.update_idletasks()  # Update the text widget
-
-                if message != "Listening...":
-                    self.text_widget.insert(tk.END, "\n\n\n")
-                else:
-                    self.text_widget.insert(tk.END, " ")
-        
-        threading.Thread(target=add_letter_by_letter).start()
-
-    def display_message_no_delay(self, message):
-
-        if message == DEFAULT_MESSAGE:
-            pygame.mixer.music.load(self.audio_dir / 'default.mp3')  # Replace with your audio file
-            pygame.mixer.music.play()
-        elif message != "Listening..." and message != "No speech detected." and message != "Processing...":
-            pygame.mixer.music.load(self.audio_dir / 'response.mp3')  # Replace with your audio file
-            pygame.mixer.music.play()
-
-        with self.display_lock:
-            self.text_widget.insert(tk.END, message + "\n")
-            self.text_widget.see(tk.END)
-            self.text_widget.update_idletasks()  # Update the text widget
-
-    def clear_text(self):
-        self.text_widget.delete(1.0, tk.END)
-        self.display_default_message()
-
-    def chat_action(self):
-        # Change the appearance of the buttons to indicate the current mode
-        self.chat_button.config(relief=tk.SUNKEN, bg='darkgrey', font=("Helvetica", 20))
-        self.goal_button.config(relief=tk.RAISED, bg='white', font=("Helvetica", 16))
-        data = {'query_type': 'set_mode', 'query': 'chat'}
-        try:
-            response = requests.post(self.url, json=data)
-        except:
-            pass
-
-    def goal_action(self):
-        self.goal_button.config(relief=tk.SUNKEN, bg='darkgrey', font=("Helvetica", 20))
-        self.chat_button.config(relief=tk.RAISED, bg='white', font=("Helvetica", 16))
-        data = {'query_type': 'set_mode', 'query': 'set_goal'}
-        try:
-            response = requests.post(self.url, json=data)
-        except:
-            pass
-
-    def picture_action(self):
-        self.picture_button.config(relief=tk.SUNKEN, bg='darkgrey', font=("Helvetica", 20))
-        self.chat_button.config(relief=tk.RAISED, bg='white', font=("Helvetica", 16))
-        data = {'query_type': 'take_picture', 'query': 'take_picture'}
-        try:
-            response = requests.post(self.url, json=data)
-        except:
-            pass
-
-        # # Reset the button after a delay
-        # def reset_button():
-        #     self.picture_button.config(relief=tk.RAISED, bg='white', font=("Helvetica", 16))
-            
-        # Display countdown message
-        self.text_widget.delete(1.0, tk.END)
-        self.display_message_no_delay("Please look at the camera!\n\n")
-        time.sleep(1)
-
-        # Countdown from 5
-        for i in range(5, 0, -1):
-            self.display_message_no_delay(f"{i} ... ")
-            time.sleep(1)
-
-        # Display the message "Cheese!" for 2 seconds
-        self.display_message_no_delay(" Cheese!\n\n")
-        time.sleep(2)
-
-        self.display_message_no_delay("Your picture has been taken!\n\n")
-        time.sleep(1)
-        # Reset the picture button after operation
-        self.picture_button.config(relief=tk.RAISED, bg='white', font=("Helvetica", 16))
-
-
-        self.text_widget.delete(1.0, tk.END)
-        self.display_message_no_delay("\n\nPlease Type Your First and\nLast Name Below and Press Enter\n\n")
-
-        # Create a frame for the input and submit button
-        input_frame = tk.Frame(self.root, bg='black')
-        input_frame.grid(row=2, column=0, columnspan=5, sticky='ew', padx=10, pady=10)
-
-        # Configure the frame's columns
-        input_frame.grid_columnconfigure(0, weight=3)
-        input_frame.grid_columnconfigure(1, weight=1)
-
-        # Create entry field for user input
-        self.user_input = tk.Entry(input_frame, font=("Helvetica", 32), bg='white', fg='black')
-        self.user_input.grid(row=0, column=0, padx=(0, 10), sticky='ew')
-
-        # Create a Cancel button
-        self.cancel_button = tk.Button(input_frame, text="Cancel", command=self.cancel_button_action, bg='white', fg='black', font=("Helvetica", 16))
-        self.cancel_button.grid(row=0, column=1, padx=(10, 0), sticky='ew')
-        
-        self.user_input.focus_set()
-        self.cancel_button.focus_set()
-
-        # Bind Enter key to submit
-        self.user_input.bind('<Return>', lambda event: self.process_first_name())
-
-    def process_first_name(self):
-        user_input = self.user_input.get()
-        self.name = user_input
-        print(f"Name: {self.name}")
-        self.user_input.delete(0, tk.END)  # Clear the entry field
-        self.text_widget.delete(1.0, tk.END)
-
-        self.display_message_no_delay("\n\nYour name and picture have been saved!\n\n")
-
-        data = {'query_type': 'set_name', 'query': self.name}
-        try:
-            response = requests.post(self.url, json=data)
-        except:
-            pass
-
-        # Remove the input frame
-        self.user_input.grid_forget()
-        self.user_input.destroy()
-
-        self.cancel_button.grid_forget()
-        self.cancel_button.destroy()
-
-        # Clean up the input frame
-        for widget in self.root.grid_slaves(row=2):
-            widget.grid_forget()
-            widget.destroy()
-
-        # Reset the grid configuration
-        self.root.grid_rowconfigure(2, weight=0)
-
-        # Reset display to default after a short delay
-        time.sleep(2)
-        self.clear_text()       
-
-    def cancel_button_action(self):
-
-        data = {'query_type': 'cancel_picture', 'query': 'cancel_picture'}
-        try:
-            response = requests.post(self.url, json=data)
-        except:
-            pass
-
-        # Remove the input frame
-        self.user_input.grid_forget()
-        self.user_input.destroy()
-
-        self.cancel_button.grid_forget()
-        self.cancel_button.destroy()
-
-        # Hide the input frame
-        for widget in self.root.grid_slaves(row=2):
-            widget.grid_forget()
-            widget.destroy()
-
-        # Reset the grid configuration
-        self.root.grid_rowconfigure(2, weight=0)
-
-        # Reset display to default
-        self.clear_text()
-
-    def socket_server(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.bind(('0.0.0.0', 65432))
-        s.listen()
-        while True:
-            conn, addr = s.accept()
-            threading.Thread(target=self.handle_client, args=(conn,)).start()
-
-    def handle_client(self, conn):
-        with conn:
-            while True:
-                data = conn.recv(1024)
-                if not data:
-                    break
-                message = data.decode('utf-8')
-                self.root.after(0, self.display_message, message)
-
-    def exit_fullscreen(self, event=None):
-        self.root.attributes("-fullscreen", False)
+    def _post_json(self, data):
+        def do_post():
+            req = urllib.request.Request(
+                BACKEND_URL, data=json.dumps(data).encode(),
+                method='POST', headers={'Content-Type': 'application/json'})
+            try:
+                urllib.request.urlopen(req, timeout=2)
+            except (urllib.error.URLError, OSError) as e:
+                log.warning('Backend request failed: %s', e)
+        threading.Thread(target=do_post, daemon=True).start()
 
     def exit_application(self):
-        self.root.quit()
+        log.info('Exit')
+        self._running = False
+        self._abort_picture()
+        if self._socket:
+            try:
+                self._socket.close()
+            except OSError:
+                pass
+        if self._audio_proc and self._audio_proc.poll() is None:
+            self._audio_proc.terminate()
+        self.root.destroy()
 
-    def display_default_message(self):
-        self.display_message_no_delay(DEFAULT_MESSAGE)
-        
-if __name__ == "__main__":
-    
+    def _play_sound(self, path):
+        if self._audio_proc and self._audio_proc.poll() is None:
+            self._audio_proc.terminate()
+        path = Path(path)
+        if path.suffix.lower() == '.wav':
+            cmd = ['aplay', str(path)] if not ALSA_DEVICE else ['aplay', '-D', ALSA_DEVICE, str(path)]
+        else:
+            cmd = ['mpg123', '-q', str(path)]
+            if ALSA_DEVICE:
+                cmd = ['mpg123', '-a', ALSA_DEVICE, '-q', str(path)]
+        try:
+            self._audio_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            log.warning('Audio playback failed: %s', e)
+
+    def _word_length(self, word):
+        return sum(helvetica_widths.get(c, 0.5) for c in word)
+
+    def _wrap_message(self, message):
+        parts, line_len = [], 0
+        for word in message.split():
+            wlen = self._word_length(word)
+            if line_len + wlen > CHARACTER_WIDTH:
+                parts.append('\n')
+                line_len = 0
+            line_len += wlen + 0.5
+            parts.append(word + ' ')
+        return ''.join(parts).strip()
+
+    def _append_text(self, text):
+        self.text_widget.config(state='normal')
+        self.text_widget.insert(tk.END, text)
+        if len(self.text_widget.get('1.0', tk.END)) > MAX_TEXT_CHARS:
+            self.text_widget.delete('1.0', 'end-4000c')
+        self.text_widget.see(tk.END)
+        self.text_widget.config(state='disabled')
+
+    def _append_message(self, message):
+        log.info(message)
+        if message == DEFAULT_MESSAGE:
+            self._play_sound(AUDIO_DIR / 'default.mp3')
+        elif message not in STATUS_MESSAGES:
+            self._play_sound(AUDIO_DIR / 'response.mp3')
+        self._append_text(self._wrap_message(message))
+        self._append_text('\n\n\n' if message != 'Listening...' else ' ')
+
+    def _enqueue_message(self, message):
+        self._msg_queue.append(message)
+        if not self._msg_drain_scheduled:
+            self._msg_drain_scheduled = True
+            self._schedule_ui(self._drain_messages)
+
+    def _drain_messages(self):
+        self._msg_drain_scheduled = False
+        if not self._msg_queue:
+            return
+        msg = self._msg_queue.popleft()
+        try:
+            self._append_message(msg)
+        except tk.TclError:
+            return
+        if self._msg_queue:
+            self._msg_drain_scheduled = True
+            self.root.after(50, self._drain_messages)
+
+    def _set_active(self, button):
+        for b in (self.chat_button, self.goal_button, self.picture_button):
+            self._style_mode_btn(b, active=(b is button))
+
+    def _abort_picture(self):
+        if self._picture_after_id:
+            self.root.after_cancel(self._picture_after_id)
+            self._picture_after_id = None
+        self._picture_step = None
+        self._style_mode_btn(self.picture_button, active=False)
+
+    def clear_text(self):
+        log.info('Clear')
+        self._abort_picture()
+        self._remove_input_frame()
+        self.text_widget.config(state='normal')
+        self.text_widget.delete(1.0, tk.END)
+        self.text_widget.config(state='disabled')
+        self._enqueue_message(DEFAULT_MESSAGE)
+
+    def chat_action(self):
+        log.info('Chat')
+        self._set_active(self.chat_button)
+        self._post_json({'query_type': 'set_mode', 'query': 'chat'})
+
+    def goal_action(self):
+        log.info('Goal')
+        self._set_active(self.goal_button)
+        self._post_json({'query_type': 'set_mode', 'query': 'set_goal'})
+
+    def picture_action(self):
+        log.info('Picture')
+        self._style_mode_btn(self.picture_button, active=True)
+        self._style_mode_btn(self.chat_button, active=False)
+        self.text_widget.config(state='normal')
+        self.text_widget.delete(1.0, tk.END)
+        self.text_widget.config(state='disabled')
+        self._picture_step = 0
+        self._post_json({'query_type': 'take_picture', 'query': 'take_picture'})
+        self._picture_tick()
+
+    def _schedule_picture(self, delay_ms, next_step):
+        self._picture_after_id = self.root.after(delay_ms, self._picture_advance, next_step)
+
+    def _picture_advance(self, next_step):
+        self._picture_after_id = None
+        self._picture_step = next_step
+        self._picture_tick()
+
+    def _picture_tick(self):
+        if self._picture_step is None:
+            return
+        step = self._picture_step
+        if step == 0:
+            self._append_text('Please look at the camera!\n\n')
+            self._schedule_picture(1000, 1)
+        elif step <= 5:
+            self._append_text(f'{6 - step} ... ')
+            self._schedule_picture(1000, step + 1)
+        elif step == 6:
+            self._append_text(' Cheese!\n\n')
+            self._schedule_picture(2000, 7)
+        elif step == 7:
+            self._append_text('Your picture has been taken!\n\n')
+            self._schedule_picture(1000, 8)
+        elif step == 8:
+            self._abort_picture()
+            self.text_widget.config(state='normal')
+            self.text_widget.delete(1.0, tk.END)
+            self.text_widget.config(state='disabled')
+            self._append_text('\n\nPlease Type Your First and\nLast Name Below and Press Enter\n\n')
+            self._show_name_entry()
+
+    def _show_name_entry(self):
+        frame = tk.Frame(self.root, bg='black')
+        frame.grid(row=2, column=0, columnspan=5, sticky='ew', padx=10, pady=10)
+        frame.grid_columnconfigure(0, weight=3)
+        frame.grid_columnconfigure(1, weight=1)
+        self._input_frame = frame
+        self.user_input = tk.Entry(frame, font=('Helvetica', 32), bg='white', fg='black')
+        self.user_input.grid(row=0, column=0, padx=(0, 10), sticky='ew')
+        self.cancel_button = _touch_button(frame, 'Cancel', self.cancel_button_action,
+                                           bg='white', fg='black', font=('Helvetica', 16))
+        self.cancel_button.grid(row=0, column=1, padx=(10, 0), sticky='ew')
+        self.user_input.focus_set()
+        self.user_input.bind('<Return>', lambda e: self.process_first_name())
+
+    def _remove_input_frame(self):
+        if hasattr(self, '_input_frame') and self._input_frame.winfo_exists():
+            self._input_frame.destroy()
+            self.root.grid_rowconfigure(2, weight=0)
+
+    def process_first_name(self):
+        self.name = self.user_input.get()
+        self._remove_input_frame()
+        self.text_widget.config(state='normal')
+        self.text_widget.delete(1.0, tk.END)
+        self.text_widget.config(state='disabled')
+        self._append_text('\n\nYour name and picture have been saved!\n\n')
+        self._post_json({'query_type': 'set_name', 'query': self.name})
+        self.root.after(2000, self.clear_text)
+
+    def cancel_button_action(self):
+        self._abort_picture()
+        self._remove_input_frame()
+        self._post_json({'query_type': 'cancel_picture', 'query': 'cancel_picture'})
+        self.clear_text()
+
+    def _socket_server(self):
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket.bind(('0.0.0.0', SOCKET_PORT))
+        self._socket.listen()
+        while self._running:
+            try:
+                conn, _ = self._socket.accept()
+            except OSError:
+                break
+            threading.Thread(target=self._handle_client, args=(conn,), daemon=True).start()
+
+    def _handle_client(self, conn):
+        buf = ''
+        with conn:
+            while True:
+                data = conn.recv(4096)
+                if not data:
+                    break
+                buf += data.decode('utf-8', errors='replace')
+                while '\n' in buf:
+                    line, buf = buf.split('\n', 1)
+                    if line:
+                        self._schedule_ui(self._enqueue_message, line)
+        if buf.strip():
+            self._schedule_ui(self._enqueue_message, buf.strip())
+
+    def _schedule_ui(self, fn, *args):
+        if not self._running:
+            return
+        try:
+            self.root.after(0, fn, *args)
+        except tk.TclError:
+            pass
+
+
+if __name__ == '__main__':
     root = tk.Tk()
-    app = MessageDisplayApp(root)
+    MessageDisplayApp(root)
     root.mainloop()
