@@ -1,9 +1,11 @@
 #!/bin/bash
-# Start or restart the display service (passwordless sudo required — see install.sh).
+# Start or restart the display (user systemd service — no sudo needed).
 set -euo pipefail
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
 SERVICE_NAME=mattbot-display
-if systemctl is-active --quiet "$SERVICE_NAME"; then
-    sudo systemctl restart "$SERVICE_NAME"
+if systemctl --user is-active --quiet "$SERVICE_NAME"; then
+    systemctl --user restart "$SERVICE_NAME"
 else
-    sudo systemctl start "$SERVICE_NAME"
+    systemctl --user start "$SERVICE_NAME"
 fi

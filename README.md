@@ -8,7 +8,7 @@ Touch-screen display for the Mattbot mobile robot. Shows messages from the robot
 python3 display_app.py
 ```
 
-Requires `python3-tk` and `alsa-utils` (`aplay`):
+Requires `python3-tk` and `alsa-utils` (`aplay`). `install.sh` installs these if missing; or manually:
 
 ```bash
 sudo apt install python3-tk alsa-utils curl wget
@@ -123,15 +123,36 @@ Override the install path: `INSTALL_DIR=/opt/mattbot/display sudo ./scripts/inst
 
 After code changes, double-click **Start-Mattbot-Display.sh** on the desktop (or run `./scripts/restart_display.sh`).
 
-Override env vars in `/etc/systemd/system/mattbot-display.service` or add an `EnvironmentFile=/etc/default/mattbot-display`.
+Override env vars in `~/.config/systemd/user/mattbot-display.service` or `/etc/default/mattbot-display`.
+
+The display runs as a **user systemd service** (not system-wide) so it can access the desktop X session. Status and logs:
+
+```bash
+systemctl --user status mattbot-display
+journalctl --user -u mattbot-display -n 30
+```
+
+If you see `couldn't connect to display ":0"`, log in to the desktop first, then `systemctl --user restart mattbot-display`. Auto-login is recommended for kiosk use.
 
 ## Exit and desktop workflow
 
 - **Exit button** — quits the display and returns you to the desktop (service stops; it does not auto-restart on a clean exit).
 - **Shut down** — use the normal desktop power menu after pressing Exit.
-- **Start display again** — double-click **Start-Mattbot-Display.sh** on the desktop. Restarts the service using the latest code in the repo (no separate sync step).
+- **Start display again** — double-click **Start-Mattbot-Display.sh** on the desktop (or use **Mattbot Display** in the application menu). Restarts the service using the latest code in the repo (no separate sync step).
 
-The desktop shortcut uses passwordless sudo for `systemctl start/restart mattbot-display` only (see `deploy/mattbot-display-sudoers`).
+The desktop shortcut starts the display via `systemctl --user` (no sudo required).
+
+### Desktop shortcut opens a text editor?
+
+On **LXDE / PCManFM** (common on Jetson), `gio metadata::trusted` is not supported — that message during install is normal. The install script enables PCManFM auto-launch instead (`quick_exec` + `exec_apps`).
+
+1. **Double-click `Start-Mattbot-Display.sh`** (not the `.desktop` file) — or launch **Mattbot Display** from the application menu.
+2. If prompted, choose **Execute** / **Run** (once).
+3. If it still opens in an editor, log out and back in, then re-run:
+   ```bash
+   sudo ./scripts/setup_desktop_shortcut.sh
+   ```
+4. Manual PCManFM setting: **Edit → Preferences → General → “Don’t ask options on launch executable file”**.
 
 ## GPU tips
 

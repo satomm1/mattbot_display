@@ -1,17 +1,20 @@
+# Legacy system service — install.sh now uses a user service instead.
+# User unit: ~/.config/systemd/user/mattbot-display.service
+#
+# Why: system services cannot reliably access the desktop X session
+# (TclError: couldn't connect to display ":0"). User services run in
+# the logged-in desktop session and inherit correct DISPLAY/XAUTHORITY.
+
 [Unit]
-Description=Mattbot touch display
-After=network.target graphical.target
-Wants=graphical.target
+Description=Mattbot touch display (deprecated — use user service)
+After=graphical-session.target
 
 [Service]
 Type=simple
-User=jetson
-Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/jetson/.Xauthority
-WorkingDirectory=/opt/mattbot/display
-ExecStart=/opt/mattbot/display/venv/bin/python3 display_app.py
+WorkingDirectory=REPO_PATH
+ExecStart=REPO_PATH/scripts/run_display_service.sh
 Restart=on-failure
 RestartSec=3
 
 [Install]
-WantedBy=graphical.target
+WantedBy=graphical-session.target
