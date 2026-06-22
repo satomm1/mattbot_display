@@ -70,6 +70,34 @@ The toolbar **Start Robot** / **Stop Robot** button controls ROS via existing ho
 
 Change launch file later via `MATTBOT_ROS_START_PATH` (e.g. `/start?social=true`).
 
+### Docker start failed (HTTP 500)
+
+The display calls `GET http://127.0.0.1:8081/docker-start` on **`/opt/robot/host_service.py`** (not part of this repo). A 500 means that service tried to start containers and failed.
+
+**Get the real error** (the response body explains what failed):
+
+```bash
+python3 -c "import urllib.request,urllib.error
+try: print(urllib.request.urlopen('http://127.0.0.1:8081/docker-start',timeout=120).read().decode())
+except urllib.error.HTTPError as e: print(e.read().decode())"
+
+journalctl -u robot-host-service -n 30 --no-pager
+```
+
+**Common causes on a new machine:**
+
+| Check | Fix |
+|-------|-----|
+| `robot-host-service` not running | `curl http://127.0.0.1:8081/status` — install with `sudo bash ~/jetson-host-install.sh` |
+| Missing Gemini API key | Create `~/gemini_api/.env` with `API_KEY=your-key` (Gemini container starts first) |
+| Missing repos | Clone/copy `~/workspaces/catkin_ws` and `~/gemini_api` |
+| Wrong paths in `host_service.py` | Paths must match your home dir (e.g. `/home/ubuntu/...` not `/home/jetson/...`). Re-run `jetson-host-install.sh` as your desktop user |
+| Docker images not pulled | `docker pull ghcr.io/satomm1/ml_ros:latest` and `ghcr.io/satomm1/gemini:latest` |
+| Missing devices | `/dev/ttyUSB0`, `/dev/video0`, etc. — plug in hardware or edit `DOCKER_RUN_CMD` in `host_service.py` |
+| Docker not running | `sudo systemctl start docker` |
+
+After updating `display_app.py`, the display shows the host service error text instead of a generic “HTTP 500”.
+
 ## Socket protocol
 
 Send UTF-8 text messages to `localhost:65432`, one message per line (newline-terminated). The display shows and **speaks** each non-status message:

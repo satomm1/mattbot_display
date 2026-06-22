@@ -216,6 +216,10 @@ class MessageDisplayApp:
         try:
             with urllib.request.urlopen(url, timeout=timeout) as resp:
                 return True, resp.read().decode().strip()
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors='replace').strip()
+            log.warning('Robot GET %s failed: %s %s', url, e, body)
+            return False, body or str(e)
         except (urllib.error.URLError, OSError) as e:
             log.warning('Robot GET %s failed: %s', url, e)
             return False, str(e)
