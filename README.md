@@ -28,9 +28,9 @@ Environment variables (defaults shown):
 | `MATTBOT_BACKEND_URL` | `http://127.0.0.1:5000/gemini` |
 | `MATTBOT_SOCKET_PORT` | `65432` |
 | `MATTBOT_AUDIO_DIR` | `~/Desktop/audio` |
-| `MATTBOT_ALSA_DEVICE` | (system default) |
+| `MATTBOT_ALSA_DEVICE` | auto-detect HDMI via `aplay -l` |
 
-Set `MATTBOT_ALSA_DEVICE` to e.g. `plughw:2,3` if audio goes to the wrong output.
+Set `MATTBOT_ALSA_DEVICE` (e.g. `plughw:2,3`) to override auto-detection. By default the app picks the first HDMI output from `aplay -l`.
 
 ## Socket protocol
 

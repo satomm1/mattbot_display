@@ -4,6 +4,7 @@ os.environ['TK_ENABLE_PLATFORM_GL'] = '0'
 
 import json
 import logging
+import re
 import socket
 import subprocess
 import threading
@@ -21,7 +22,41 @@ log = logging.getLogger(__name__)
 BACKEND_URL = os.environ.get('MATTBOT_BACKEND_URL', 'http://127.0.0.1:5000/gemini')
 SOCKET_PORT = int(os.environ.get('MATTBOT_SOCKET_PORT', '65432'))
 AUDIO_DIR = Path(os.environ.get('MATTBOT_AUDIO_DIR', Path.home() / 'Desktop' / 'audio'))
-ALSA_DEVICE = os.environ.get('MATTBOT_ALSA_DEVICE', 'plughw:1,3')
+
+
+def _detect_hdmi_alsa_device():
+    """Pick first HDMI output from aplay -l, skipping USB camera mics."""
+    try:
+        out = subprocess.check_output(['aplay', '-l'], stderr=subprocess.DEVNULL, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    devices = []
+    for line in out.splitlines():
+        # Compact: "card 2: HDA [...], device 3: HDMI 0 [HDMI 0]"
+        if m := re.search(r'card (\d+):.+device (\d+): (.+)', line):
+            card, dev, name = int(m.group(1)), int(m.group(2)), m.group(3)
+            if 'HDMI' in name:
+                hdmi_n = int(hm.group(1)) if (hm := re.search(r'HDMI (\d+)', name)) else dev
+                devices.append((hdmi_n, card, dev))
+    if not devices:
+        return ''
+    devices.sort()
+    c, d = devices[0][1], devices[0][2]
+    return f'plughw:{c},{d}'
+
+
+def _resolve_alsa_device():
+    if os.environ.get('MATTBOT_ALSA_DEVICE'):
+        return os.environ['MATTBOT_ALSA_DEVICE']
+    detected = _detect_hdmi_alsa_device()
+    if detected:
+        log.info('Auto-detected ALSA device: %s', detected)
+        return detected
+    log.warning('No HDMI ALSA device found; using system default')
+    return ''
+
+
+ALSA_DEVICE = _resolve_alsa_device()
 MAX_TEXT_CHARS = 8000
 
 DEFAULT_MESSAGE = 'Hello! I am a mobile robot.\nSay "Hey Robot" to talk to me.'
@@ -146,16 +181,30 @@ class MessageDisplayApp:
         if self._audio_proc and self._audio_proc.poll() is None:
             self._audio_proc.terminate()
         path = Path(path)
+        if not path.is_file():
+            log.warning('Audio file not found: %s', path)
+            return
         if path.suffix.lower() == '.wav':
-            cmd = ['aplay', str(path)] if not ALSA_DEVICE else ['aplay', '-D', ALSA_DEVICE, str(path)]
+            cmd = ['aplay', '-D', ALSA_DEVICE, str(path)] if ALSA_DEVICE else ['aplay', str(path)]
         else:
             cmd = ['mpg123', '-q', str(path)]
             if ALSA_DEVICE:
                 cmd = ['mpg123', '-a', ALSA_DEVICE, '-q', str(path)]
         try:
-            self._audio_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._audio_proc = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            threading.Thread(target=self._watch_audio, args=(path.name,), daemon=True).start()
         except OSError as e:
             log.warning('Audio playback failed: %s', e)
+
+    def _watch_audio(self, name):
+        if not self._audio_proc:
+            return
+        err = self._audio_proc.communicate()[1]
+        rc = self._audio_proc.returncode
+        if rc not in (0, -15):  # 0=ok, -15=terminated for next sound
+            msg = err.decode(errors='replace').strip() if err else f'exit {rc}'
+            log.warning('Audio %s failed: %s', name, msg)
 
     def _word_length(self, word):
         return sum(helvetica_widths.get(c, 0.5) for c in word)
