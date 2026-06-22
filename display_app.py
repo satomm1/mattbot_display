@@ -62,6 +62,7 @@ MAX_TEXT_CHARS = 8000
 DEFAULT_MESSAGE = 'Hello! I am a mobile robot.\nSay "Hey Robot" to talk to me.'
 CHARACTER_WIDTH = 19
 STATUS_MESSAGES = frozenset(('Listening...', 'No speech detected.', 'Processing...'))
+SHOW_PICTURE_BUTTON = os.environ.get('MATTBOT_SHOW_PICTURE', '0').lower() in ('1', 'true', 'yes')
 
 
 def _touch_button(parent, text, action, bind=True, **kwargs):
@@ -99,25 +100,31 @@ class MessageDisplayApp:
         root.bind('<Escape>', lambda e: root.attributes('-fullscreen', False))
         root.protocol('WM_DELETE_WINDOW', self.exit_application)
         root.grid_rowconfigure(1, weight=1)
-        for i in range(5):
+        toolbar_cols = 5 if SHOW_PICTURE_BUTTON else 4
+        self._toolbar_cols = toolbar_cols
+        for i in range(toolbar_cols):
             root.grid_columnconfigure(i, weight=1)
 
         btn_kw = dict(bg='white', fg='black', font=('Helvetica', 16))
         self.toolbar = tk.Frame(root, bg='black')
-        self.toolbar.grid(row=0, column=0, columnspan=5, sticky='ew')
-        for i in range(5):
+        self.toolbar.grid(row=0, column=0, columnspan=toolbar_cols, sticky='ew')
+        for i in range(toolbar_cols):
             self.toolbar.grid_columnconfigure(i, weight=1)
 
         self.clear_button = self._make_button('Clear', self.clear_text, 0, **btn_kw)
         self.chat_button = self._make_button('Chat', self.chat_action, 1, **btn_kw)
         self.goal_button = self._make_button('Set Goal', self.goal_action, 2, **btn_kw)
-        self.picture_button = self._make_button('Take Picture', self.picture_action, 3, **btn_kw)
-        self.exit_button = self._make_button('Exit', self.exit_application, 4, **btn_kw)
+        if SHOW_PICTURE_BUTTON:
+            self.picture_button = self._make_button('Take Picture', self.picture_action, 3, **btn_kw)
+            self.exit_button = self._make_button('Exit', self.exit_application, 4, **btn_kw)
+        else:
+            self.picture_button = None
+            self.exit_button = self._make_button('Exit', self.exit_application, 3, **btn_kw)
 
         self.text_widget = tk.Text(root, bg='black', fg='white', insertbackground='white',
                                    font=('Helvetica', 40), state='disabled', cursor='arrow',
                                    takefocus=0)
-        self.text_widget.grid(row=1, column=0, columnspan=5, sticky='nsew', padx=10, pady=10)
+        self.text_widget.grid(row=1, column=0, columnspan=toolbar_cols, sticky='nsew', padx=10, pady=10)
         self.toolbar.lift()
 
         for seq in ('<Button-1>', '<ButtonRelease-1>', '<1>'):
@@ -262,7 +269,10 @@ class MessageDisplayApp:
             self.root.after(50, self._drain_messages)
 
     def _set_active(self, button):
-        for b in (self.chat_button, self.goal_button, self.picture_button):
+        mode_buttons = [self.chat_button, self.goal_button]
+        if self.picture_button:
+            mode_buttons.append(self.picture_button)
+        for b in mode_buttons:
             self._style_mode_btn(b, active=(b is button))
 
     def _abort_picture(self):
@@ -270,7 +280,8 @@ class MessageDisplayApp:
             self.root.after_cancel(self._picture_after_id)
             self._picture_after_id = None
         self._picture_step = None
-        self._style_mode_btn(self.picture_button, active=False)
+        if self.picture_button:
+            self._style_mode_btn(self.picture_button, active=False)
 
     def clear_text(self):
         log.info('Clear')
@@ -293,8 +304,9 @@ class MessageDisplayApp:
 
     def picture_action(self):
         log.info('Picture')
-        self._style_mode_btn(self.picture_button, active=True)
-        self._style_mode_btn(self.chat_button, active=False)
+        if self.picture_button:
+            self._style_mode_btn(self.picture_button, active=True)
+            self._style_mode_btn(self.chat_button, active=False)
         self.text_widget.config(state='normal')
         self.text_widget.delete(1.0, tk.END)
         self.text_widget.config(state='disabled')
@@ -336,7 +348,7 @@ class MessageDisplayApp:
 
     def _show_name_entry(self):
         frame = tk.Frame(self.root, bg='black')
-        frame.grid(row=2, column=0, columnspan=5, sticky='ew', padx=10, pady=10)
+        frame.grid(row=2, column=0, columnspan=self._toolbar_cols, sticky='ew', padx=10, pady=10)
         frame.grid_columnconfigure(0, weight=3)
         frame.grid_columnconfigure(1, weight=1)
         self._input_frame = frame
