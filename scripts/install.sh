@@ -39,6 +39,11 @@ EOF
 echo "Installing display from: $INSTALL_DIR"
 sudo chmod +x "$INSTALL_DIR/scripts/"*.sh
 
+if [[ -x "$INSTALL_DIR/scripts/setup_piper.sh" ]]; then
+    echo "Setting up Piper TTS..."
+    "$INSTALL_DIR/scripts/setup_piper.sh" || echo "Warning: Piper setup failed (TTS disabled until setup_piper.sh succeeds)"
+fi
+
 write_config
 write_service
 sudo cp "$SCRIPT_DIR/deploy/mattbot-display-sudoers" "/etc/sudoers.d/mattbot-display"

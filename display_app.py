@@ -20,9 +20,15 @@ from helvetica import helvetica_widths
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 log = logging.getLogger(__name__)
 
+REPO_DIR = Path(__file__).resolve().parent
 BACKEND_URL = os.environ.get('MATTBOT_BACKEND_URL', 'http://127.0.0.1:5000/gemini')
 SOCKET_PORT = int(os.environ.get('MATTBOT_SOCKET_PORT', '65432'))
-AUDIO_DIR = Path(os.environ.get('MATTBOT_AUDIO_DIR', Path.home() / 'Desktop' / 'audio'))
+PIPER_BIN = Path(os.environ.get('MATTBOT_PIPER_BIN', REPO_DIR / 'piper' / 'piper'))
+PIPER_MODEL = Path(os.environ.get(
+    'MATTBOT_PIPER_MODEL', REPO_DIR / 'piper' / 'voices' / 'en_US-amy-medium.onnx'))
+PIPER_SAMPLE_RATE = int(os.environ.get('MATTBOT_PIPER_SAMPLE_RATE', '22050'))
+PIPER_LENGTH_SCALE = float(os.environ.get('MATTBOT_PIPER_LENGTH_SCALE', '1.0'))
+PIPER_SPEAKER = os.environ.get('MATTBOT_PIPER_SPEAKER', '')
 HOST_SERVICE_URL = os.environ.get('MATTBOT_HOST_SERVICE_URL', 'http://127.0.0.1:8081')
 LAUNCHER_URL = os.environ.get('MATTBOT_LAUNCHER_URL', 'http://127.0.0.1:8080')
 ROS_START_PATH = os.environ.get('MATTBOT_ROS_START_PATH', '/start?kaist=true')
@@ -63,6 +69,12 @@ def _resolve_alsa_device():
 
 ALSA_DEVICE = _resolve_alsa_device()
 MAX_TEXT_CHARS = 8000
+MAX_SPEAK_CHARS = 500
+
+if not PIPER_BIN.is_file():
+    log.warning('Piper binary not found at %s — run scripts/setup_piper.sh', PIPER_BIN)
+if not PIPER_MODEL.is_file():
+    log.warning('Piper model not found at %s — run scripts/setup_piper.sh', PIPER_MODEL)
 
 DEFAULT_MESSAGE = 'Hello! I am a mobile robot.\nSay "Hey Robot" to talk to me.'
 CHARACTER_WIDTH = 19
@@ -90,7 +102,8 @@ class MessageDisplayApp:
     def __init__(self, root):
         self.root = root
         self.name = ''
-        self._audio_proc = None
+        self._speak_procs = []
+        self._speak_lock = threading.Lock()
         self._picture_step = None
         self._picture_after_id = None
         self._running = True
@@ -321,8 +334,7 @@ class MessageDisplayApp:
                 self._socket.close()
             except OSError:
                 pass
-        if self._audio_proc and self._audio_proc.poll() is None:
-            self._audio_proc.terminate()
+        self._stop_speech()
         try:
             self.root.attributes('-fullscreen', False)
             self.root.update_idletasks()
@@ -330,34 +342,58 @@ class MessageDisplayApp:
             pass
         self.root.destroy()
 
-    def _play_sound(self, path):
-        if self._audio_proc and self._audio_proc.poll() is None:
-            self._audio_proc.terminate()
-        path = Path(path)
-        if not path.is_file():
-            log.warning('Audio file not found: %s', path)
-            return
-        if path.suffix.lower() == '.wav':
-            cmd = ['aplay', '-D', ALSA_DEVICE, str(path)] if ALSA_DEVICE else ['aplay', str(path)]
-        else:
-            cmd = ['mpg123', '-q', str(path)]
-            if ALSA_DEVICE:
-                cmd = ['mpg123', '-a', ALSA_DEVICE, '-q', str(path)]
-        try:
-            self._audio_proc = subprocess.Popen(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-            threading.Thread(target=self._watch_audio, args=(path.name,), daemon=True).start()
-        except OSError as e:
-            log.warning('Audio playback failed: %s', e)
+    def _stop_speech(self):
+        with self._speak_lock:
+            for proc in self._speak_procs:
+                if proc.poll() is None:
+                    proc.terminate()
+            self._speak_procs = []
 
-    def _watch_audio(self, name):
-        if not self._audio_proc:
+    def _speak_text(self, text):
+        text = text.strip().replace('\n', ' ')
+        if not text:
             return
-        err = self._audio_proc.communicate()[1]
-        rc = self._audio_proc.returncode
-        if rc not in (0, -15):  # 0=ok, -15=terminated for next sound
-            msg = err.decode(errors='replace').strip() if err else f'exit {rc}'
-            log.warning('Audio %s failed: %s', name, msg)
+        if len(text) > MAX_SPEAK_CHARS:
+            text = text[:MAX_SPEAK_CHARS]
+        if not PIPER_BIN.is_file() or not PIPER_MODEL.is_file():
+            return
+        self._stop_speech()
+        threading.Thread(target=self._speak_worker, args=(text,), daemon=True).start()
+
+    def _speak_worker(self, text):
+        piper_cmd = [str(PIPER_BIN), '--model', str(PIPER_MODEL), '--output_raw',
+                     '--length_scale', str(PIPER_LENGTH_SCALE)]
+        if PIPER_SPEAKER:
+            piper_cmd.extend(['--speaker', PIPER_SPEAKER])
+        aplay_cmd = ['aplay', '-r', str(PIPER_SAMPLE_RATE), '-f', 'S16_LE', '-c', '1', '-t', 'raw']
+        if ALSA_DEVICE:
+            aplay_cmd.extend(['-D', ALSA_DEVICE])
+        aplay_cmd.append('-')
+        piper = aplay = None
+        try:
+            piper = subprocess.Popen(
+                piper_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL)
+            aplay = subprocess.Popen(
+                aplay_cmd, stdin=piper.stdout, stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE)
+            piper.stdout.close()
+            with self._speak_lock:
+                self._speak_procs = [piper, aplay]
+            piper.communicate(input=text.encode('utf-8'), timeout=60)
+            aplay.wait(timeout=30)
+            if aplay.returncode not in (0, -15):
+                err = aplay.stderr.read().decode(errors='replace').strip() if aplay.stderr else ''
+                log.warning('Speech playback failed: %s', err or aplay.returncode)
+        except subprocess.TimeoutExpired:
+            log.warning('Speech timed out')
+            self._stop_speech()
+        except OSError as e:
+            log.warning('Speech failed: %s', e)
+        finally:
+            with self._speak_lock:
+                if piper in self._speak_procs or aplay in self._speak_procs:
+                    self._speak_procs = []
 
     def _word_length(self, word):
         return sum(helvetica_widths.get(c, 0.5) for c in word)
@@ -383,10 +419,8 @@ class MessageDisplayApp:
 
     def _append_message(self, message):
         log.info(message)
-        if message == DEFAULT_MESSAGE:
-            self._play_sound(AUDIO_DIR / 'default.mp3')
-        elif message not in STATUS_MESSAGES:
-            self._play_sound(AUDIO_DIR / 'response.mp3')
+        if message not in STATUS_MESSAGES:
+            self._speak_text(message)
         self._append_text(self._wrap_message(message))
         self._append_text('\n\n\n' if message != 'Listening...' else ' ')
 

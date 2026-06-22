@@ -16,3 +16,9 @@ venv/
 .DS_Store
 *.swp
 *~
+
+# Piper (downloaded by scripts/setup_piper.sh)
+piper/*
+!piper/README.md
+!piper/voices/
+piper/voices/*

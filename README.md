@@ -1,6 +1,6 @@
 # mattbot_display
 
-Touch-screen display for the Mattbot mobile robot. Shows messages from the robot backend and sends user actions back over HTTP.
+Touch-screen display for the Mattbot mobile robot. Shows messages from the robot backend and sends user actions back over HTTP. Speech is synthesized locally with Piper TTS.
 
 ## Run locally
 
@@ -8,16 +8,29 @@ Touch-screen display for the Mattbot mobile robot. Shows messages from the robot
 python3 display_app.py
 ```
 
-Requires `python3-tk`. Audio uses system `mpg123` (MP3) or `aplay` (WAV):
+Requires `python3-tk` and `alsa-utils` (`aplay`):
 
 ```bash
-sudo apt install mpg123
+sudo apt install python3-tk alsa-utils curl wget
 ```
 
-Place audio files in `~/Desktop/audio/` (or set `MATTBOT_AUDIO_DIR`):
+### Piper TTS setup
 
-- `default.mp3` — played on the welcome message
-- `response.mp3` — played on robot responses
+Piper binary and voice live in `./piper/` (not committed to git). One-time setup:
+
+```bash
+./scripts/setup_piper.sh
+```
+
+Test audio on HDMI speakers:
+
+```bash
+echo "Hello, I am a mobile robot." | ./piper/piper \
+  --model ./piper/voices/en_US-amy-medium.onnx --output_raw | \
+  aplay -r 22050 -f S16_LE -c 1 -t raw -
+```
+
+See [piper/README.md](piper/README.md) for layout and overrides.
 
 ## Configuration
 
@@ -27,7 +40,11 @@ Environment variables (defaults shown):
 |----------|---------|
 | `MATTBOT_BACKEND_URL` | `http://127.0.0.1:5000/gemini` |
 | `MATTBOT_SOCKET_PORT` | `65432` |
-| `MATTBOT_AUDIO_DIR` | `~/Desktop/audio` |
+| `MATTBOT_PIPER_BIN` | `{repo}/piper/piper` |
+| `MATTBOT_PIPER_MODEL` | `{repo}/piper/voices/en_US-amy-medium.onnx` |
+| `MATTBOT_PIPER_SAMPLE_RATE` | `22050` |
+| `MATTBOT_PIPER_LENGTH_SCALE` | `1.0` (higher = slower) |
+| `MATTBOT_PIPER_SPEAKER` | *(unset — optional multi-speaker id)* |
 | `MATTBOT_ALSA_DEVICE` | auto-detect HDMI via `aplay -l` |
 | `MATTBOT_HOST_SERVICE_URL` | `http://127.0.0.1:8081` |
 | `MATTBOT_LAUNCHER_URL` | `http://127.0.0.1:8080` |
@@ -55,12 +72,41 @@ Change launch file later via `MATTBOT_ROS_START_PATH` (e.g. `/start?social=true`
 
 ## Socket protocol
 
-Send UTF-8 text messages to `localhost:65432`, one message per line (newline-terminated):
+Send UTF-8 text messages to `localhost:65432`, one message per line (newline-terminated). The display shows and **speaks** each non-status message:
 
 ```bash
 echo "Hello robot" | nc localhost 65432
 python3 send_message.py
 ```
+
+Status messages (`Listening...`, `Processing...`, `No speech detected.`) are shown but not spoken.
+
+## gemini_api migration (text-only TTS)
+
+The display now handles speech from socket text. Update `~/gemini_api` separately:
+
+1. **Remove gTTS** from `endpoint.py` (and `endpoint_openai.py` if used):
+
+   ```python
+   # Delete: from gtts import gTTS
+   # Delete: tts = gTTS(...); tts.save("../audio/response.mp3")
+   ```
+
+2. **Keep** `send_message(text)` — the display speaks the same string it shows.
+
+3. **Append newline** when sending (recommended):
+
+   ```python
+   s.sendall((message + '\n').encode('utf-8'))
+   ```
+
+4. **Docker run** — drop the audio volume if it was only for gTTS output:
+
+   ```bash
+   # Remove: -v ~/Desktop/audio:/audio
+   ```
+
+   Mount only the gemini code and expose port 5000. No MP3 files or `~/Desktop/audio/` needed.
 
 ## Systemd install
 
@@ -68,10 +114,10 @@ On a fixed Jetson image, install as a service (no PyInstaller needed):
 
 ```bash
 chmod +x scripts/install.sh
-./scripts/install.sh
+sudo ./scripts/install.sh
 ```
 
-This installs systemd, sudoers, and desktop shortcuts. The service runs **directly from this repo** — edit code here, then restart from the desktop (no sync step).
+This runs `setup_piper.sh`, installs systemd, sudoers, and desktop shortcuts. The service runs **directly from this repo** — edit code here, then restart from the desktop (no sync step).
 
 Override the install path: `INSTALL_DIR=/opt/mattbot/display sudo ./scripts/install.sh`
 
