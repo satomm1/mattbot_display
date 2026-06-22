@@ -1,10 +1,13 @@
+# Template — install.sh generates ~/Desktop shortcuts with the correct repo path.
+# Do not copy directly; run: sudo ./scripts/setup_desktop_shortcut.sh
+
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=Mattbot Display
 Comment=Start the robot touch screen display
-Exec=/opt/mattbot/display/scripts/start_display.sh
-Path=/opt/mattbot/display
+Exec=REPO_PATH/scripts/start_display.sh
+Path=REPO_PATH
 Icon=video-display
 Terminal=false
 Categories=Utility;

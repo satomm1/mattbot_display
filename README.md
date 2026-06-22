@@ -50,7 +50,11 @@ chmod +x scripts/install.sh
 ./scripts/install.sh
 ```
 
-This copies the app to `/opt/mattbot/display`, creates a venv, and enables `mattbot-display.service`.
+This installs systemd, sudoers, and desktop shortcuts. The service runs **directly from this repo** — edit code here, then restart from the desktop (no sync step).
+
+Override the install path: `INSTALL_DIR=/opt/mattbot/display sudo ./scripts/install.sh`
+
+After code changes, double-click **Start-Mattbot-Display.sh** on the desktop (or run `./scripts/restart_display.sh`).
 
 Override env vars in `/etc/systemd/system/mattbot-display.service` or add an `EnvironmentFile=/etc/default/mattbot-display`.
 
@@ -58,9 +62,7 @@ Override env vars in `/etc/systemd/system/mattbot-display.service` or add an `En
 
 - **Exit button** — quits the display and returns you to the desktop (service stops; it does not auto-restart on a clean exit).
 - **Shut down** — use the normal desktop power menu after pressing Exit.
-- **Start display again** — double-click **Start-Mattbot-Display.sh** on the desktop (most reliable), or **Mattbot Display** if your file manager supports `.desktop` launchers.
-
-Run `scripts/setup_desktop_shortcut.sh` if the shortcut opens in a text editor (marks the `.desktop` file as trusted on GNOME).
+- **Start display again** — double-click **Start-Mattbot-Display.sh** on the desktop. Restarts the service using the latest code in the repo (no separate sync step).
 
 The desktop shortcut uses passwordless sudo for `systemctl start/restart mattbot-display` only (see `deploy/mattbot-display-sudoers`).
 
