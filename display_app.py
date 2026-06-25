@@ -10,12 +10,11 @@ import subprocess
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 import urllib.error
 import urllib.request
 from collections import deque
 from pathlib import Path
-
-from helvetica import helvetica_widths
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 log = logging.getLogger(__name__)
@@ -77,7 +76,6 @@ if not PIPER_MODEL.is_file():
     log.warning('Piper model not found at %s — run scripts/setup_piper.sh', PIPER_MODEL)
 
 DEFAULT_MESSAGE = 'Hello! I am a mobile robot.\nSay "Hey Robot" to talk to me.'
-CHARACTER_WIDTH = 19
 STATUS_MESSAGES = frozenset(('Listening...', 'No speech detected.', 'Processing...'))
 SHOW_PICTURE_BUTTON = os.environ.get('MATTBOT_SHOW_PICTURE', '0').lower() in ('1', 'true', 'yes')
 
@@ -152,6 +150,9 @@ class MessageDisplayApp:
                                    font=('Helvetica', 40), state='disabled', cursor='arrow',
                                    takefocus=0)
         self.text_widget.grid(row=1, column=0, columnspan=self._toolbar_cols, sticky='nsew', padx=10, pady=10)
+        self._msg_font = tkfont.Font(font=self.text_widget['font'])
+        self._wrap_pixels = 0
+        self.text_widget.bind('<Configure>', lambda e: self._update_wrap_width())
         self.toolbar.lift()
 
         for seq in ('<Button-1>', '<ButtonRelease-1>', '<1>'):
@@ -161,8 +162,23 @@ class MessageDisplayApp:
 
         self._style_mode_btn(self.chat_button, active=True)
         self._post_json({'query_type': 'set_mode', 'query': 'chat'})
-        self.root.after_idle(lambda: self._enqueue_message(DEFAULT_MESSAGE))
+        self.root.after_idle(self._show_welcome)
         self.root.after(ROBOT_POLL_MS, self._poll_robot_status)
+
+    def _show_welcome(self):
+        self._update_wrap_width()
+        self._enqueue_message(DEFAULT_MESSAGE)
+
+    def _update_wrap_width(self):
+        self.root.update_idletasks()
+        w = self.text_widget.winfo_width()
+        if w <= 1:
+            return
+        margin_px = int(os.environ.get('MATTBOT_WRAP_MARGIN_PX', '0'))
+        if margin_px <= 0:
+            margin_px = self._msg_font.measure('MM')
+        pad = 20
+        self._wrap_pixels = max(100, w - pad - margin_px)
 
     def _make_button(self, text, action, column, **kwargs):
         btn = _touch_button(self.toolbar, text, action, bind=False, **kwargs)
@@ -399,19 +415,27 @@ class MessageDisplayApp:
                 if piper in self._speak_procs or aplay in self._speak_procs:
                     self._speak_procs = []
 
-    def _word_length(self, word):
-        return sum(helvetica_widths.get(c, 0.5) for c in word)
+    def _wrap_paragraph(self, paragraph, max_px):
+        parts, line = [], ''
+        for word in paragraph.split():
+            candidate = (line + ' ' + word).strip()
+            if line and self._msg_font.measure(candidate) > max_px:
+                parts.append(line)
+                line = word
+            else:
+                line = candidate
+        if line:
+            parts.append(line)
+        return '\n'.join(parts)
 
     def _wrap_message(self, message):
-        parts, line_len = [], 0
-        for word in message.split():
-            wlen = self._word_length(word)
-            if line_len + wlen > CHARACTER_WIDTH:
-                parts.append('\n')
-                line_len = 0
-            line_len += wlen + 0.5
-            parts.append(word + ' ')
-        return ''.join(parts).strip()
+        if self._wrap_pixels <= 0:
+            self._update_wrap_width()
+        max_px = self._wrap_pixels or 800
+        paragraphs = [p.strip() for p in message.split('\n') if p.strip()]
+        if not paragraphs:
+            return ''
+        return '\n'.join(self._wrap_paragraph(p, max_px) for p in paragraphs)
 
     def _append_text(self, text):
         self.text_widget.config(state='normal')

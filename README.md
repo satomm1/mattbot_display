@@ -50,6 +50,7 @@ Environment variables (defaults shown):
 | `MATTBOT_LAUNCHER_URL` | `http://127.0.0.1:8080` |
 | `MATTBOT_ROS_START_PATH` | `/start?kaist=true` |
 | `MATTBOT_ROBOT_POLL_MS` | `2000` |
+| `MATTBOT_WRAP_MARGIN_PX` | auto (~2× 'M' width) | Extra right-edge buffer for text wrapping (pixels) |
 
 Set `MATTBOT_ALSA_DEVICE` (e.g. `plughw:2,3`) to override auto-detection. By default the app picks the first HDMI output from `aplay -l`.
 
