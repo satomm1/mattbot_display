@@ -101,14 +101,24 @@ After updating `display_app.py`, the display shows the host service error text i
 
 ## Socket protocol
 
-Send UTF-8 text messages to `localhost:65432`, one message per line (newline-terminated). The display shows and **speaks** each non-status message:
+Each sender opens a connection to `localhost:65432` (`172.17.0.1:65432` from a Docker container), sends one JSON object per line (UTF-8, newline-terminated) and closes it:
 
-```bash
-echo "Hello robot" | nc localhost 65432
-python3 send_message.py
+```json
+{"text": "Slowing for human", "speak": false}
+{"text": "Excuse me!", "speak": true}
 ```
 
-Status messages (`Listening...`, `Processing...`, `No speech detected.`) are shown but not spoken.
+- `text` (string) is always shown. Newlines inside it (JSON-escaped `\n`) become line breaks.
+- `speak` (boolean) — only `true` also speaks the text with Piper. Missing means `false`.
+- Spoken messages are queued and played in order; speech never blocks the display or socket.
+- Unknown fields are ignored. A line that isn't a JSON object with a string `text` is shown as plain text and not spoken.
+
+```bash
+printf '{"text": "Slowing for human", "speak": false}\n' | nc 127.0.0.1 65432
+printf '{"text": "Excuse me!", "speak": true}\n' | nc 127.0.0.1 65432
+printf 'plain old text\n' | nc 127.0.0.1 65432
+python3 send_message.py   # prefix a message with ! to speak it
+```
 
 ## gemini_api migration (text-only TTS)
 
@@ -121,12 +131,10 @@ The display now handles speech from socket text. Update `~/gemini_api` separatel
    # Delete: tts = gTTS(...); tts.save("../audio/response.mp3")
    ```
 
-2. **Keep** `send_message(text)` — the display speaks the same string it shows.
-
-3. **Append newline** when sending (recommended):
+2. **Send JSON** — the display speaks only messages with `"speak": true`:
 
    ```python
-   s.sendall((message + '\n').encode('utf-8'))
+   s.sendall((json.dumps({'text': text, 'speak': speak}) + '\n').encode('utf-8'))
    ```
 
 4. **Docker run** — drop the audio volume if it was only for gTTS output:

@@ -4,6 +4,7 @@ os.environ['TK_ENABLE_PLATFORM_GL'] = '0'
 
 import json
 import logging
+import queue
 import re
 import socket
 import subprocess
@@ -76,7 +77,6 @@ if not PIPER_MODEL.is_file():
     log.warning('Piper model not found at %s — run scripts/setup_piper.sh', PIPER_MODEL)
 
 DEFAULT_MESSAGE = 'Hello! I am a mobile robot.\nSay "Hey Robot" to talk to me.'
-STATUS_MESSAGES = frozenset(('Listening...', 'No speech detected.', 'Processing...'))
 SHOW_PICTURE_BUTTON = os.environ.get('MATTBOT_SHOW_PICTURE', '0').lower() in ('1', 'true', 'yes')
 
 
@@ -102,6 +102,7 @@ class MessageDisplayApp:
         self.name = ''
         self._speak_procs = []
         self._speak_lock = threading.Lock()
+        self._speak_queue = queue.Queue()
         self._picture_step = None
         self._picture_after_id = None
         self._running = True
@@ -159,6 +160,7 @@ class MessageDisplayApp:
             root.bind_all(seq, self._global_touch, add='+')
 
         threading.Thread(target=self._socket_server, daemon=True).start()
+        threading.Thread(target=self._speak_loop, daemon=True).start()
 
         self._style_mode_btn(self.chat_button, active=True)
         self._post_json({'query_type': 'set_mode', 'query': 'chat'})
@@ -167,7 +169,7 @@ class MessageDisplayApp:
 
     def _show_welcome(self):
         self._update_wrap_width()
-        self._enqueue_message(DEFAULT_MESSAGE)
+        self._enqueue_message(DEFAULT_MESSAGE, speak=True)
 
     def _update_wrap_width(self):
         self.root.update_idletasks()
@@ -363,6 +365,11 @@ class MessageDisplayApp:
         self.root.destroy()
 
     def _stop_speech(self):
+        while True:
+            try:
+                self._speak_queue.get_nowait()
+            except queue.Empty:
+                break
         with self._speak_lock:
             for proc in self._speak_procs:
                 if proc.poll() is None:
@@ -377,8 +384,14 @@ class MessageDisplayApp:
             text = text[:MAX_SPEAK_CHARS]
         if not PIPER_BIN.is_file() or not PIPER_MODEL.is_file():
             return
-        self._stop_speech()
-        threading.Thread(target=self._speak_worker, args=(text,), daemon=True).start()
+        self._speak_queue.put(text)
+
+    def _speak_loop(self):
+        # Single worker so spoken messages play in order instead of cutting each other off.
+        while self._running:
+            text = self._speak_queue.get()
+            if self._running:
+                self._speak_worker(text)
 
     def _speak_worker(self, text):
         piper_cmd = [str(PIPER_BIN), '--model', str(PIPER_MODEL), '--output_raw',
@@ -445,15 +458,15 @@ class MessageDisplayApp:
         self.text_widget.see(tk.END)
         self.text_widget.config(state='disabled')
 
-    def _append_message(self, message):
-        log.info(message)
-        if message not in STATUS_MESSAGES:
+    def _append_message(self, message, speak=False):
+        log.info('%s%s', '[speak] ' if speak else '', message)
+        if speak:
             self._speak_text(message)
         self._append_text(self._wrap_message(message))
         self._append_text('\n\n\n' if message != 'Listening...' else ' ')
 
-    def _enqueue_message(self, message):
-        self._msg_queue.append(message)
+    def _enqueue_message(self, message, speak=False):
+        self._msg_queue.append((message, speak))
         if not self._msg_drain_scheduled:
             self._msg_drain_scheduled = True
             self._schedule_ui(self._drain_messages)
@@ -462,9 +475,9 @@ class MessageDisplayApp:
         self._msg_drain_scheduled = False
         if not self._msg_queue:
             return
-        msg = self._msg_queue.popleft()
+        msg, speak = self._msg_queue.popleft()
         try:
-            self._append_message(msg)
+            self._append_message(msg, speak)
         except tk.TclError:
             return
         if self._msg_queue:
@@ -493,7 +506,7 @@ class MessageDisplayApp:
         self.text_widget.config(state='normal')
         self.text_widget.delete(1.0, tk.END)
         self.text_widget.config(state='disabled')
-        self._enqueue_message(DEFAULT_MESSAGE)
+        self._enqueue_message(DEFAULT_MESSAGE, speak=True)
 
     def chat_action(self):
         log.info('Chat')
@@ -596,20 +609,40 @@ class MessageDisplayApp:
                 break
             threading.Thread(target=self._handle_client, args=(conn,), daemon=True).start()
 
+    @staticmethod
+    def _parse_message(line):
+        """Return (text, speak) from a JSON line; fall back to plain text with speak=False."""
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            return line, False
+        if not isinstance(obj, dict) or not isinstance(obj.get('text'), str):
+            return line, False
+        return obj['text'], obj.get('speak') is True
+
+    def _handle_line(self, raw):
+        line = raw.decode('utf-8', errors='replace').strip()
+        if not line:
+            return
+        text, speak = self._parse_message(line)
+        if text.strip():
+            self._schedule_ui(self._enqueue_message, text, speak)
+
     def _handle_client(self, conn):
-        buf = ''
-        with conn:
-            while True:
-                data = conn.recv(4096)
-                if not data:
-                    break
-                buf += data.decode('utf-8', errors='replace')
-                while '\n' in buf:
-                    line, buf = buf.split('\n', 1)
-                    if line:
-                        self._schedule_ui(self._enqueue_message, line)
-        if buf.strip():
-            self._schedule_ui(self._enqueue_message, buf.strip())
+        buf = b''
+        try:
+            with conn:
+                while True:
+                    data = conn.recv(4096)
+                    if not data:
+                        break
+                    buf += data
+                    while b'\n' in buf:
+                        line, buf = buf.split(b'\n', 1)
+                        self._handle_line(line)
+            self._handle_line(buf)
+        except Exception:
+            log.exception('Socket client error')
 
     def _schedule_ui(self, fn, *args):
         if not self._running:
