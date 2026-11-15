@@ -80,6 +80,20 @@ DEFAULT_MESSAGE = 'Hello! I am a mobile robot.\nSay "Hey Robot" to talk to me.'
 SHOW_PICTURE_BUTTON = os.environ.get('MATTBOT_SHOW_PICTURE', '0').lower() in ('1', 'true', 'yes')
 
 
+def _tap_handler(action):
+    """Run action once per tap: on press, or on release when no press was seen."""
+    pressed = [False]
+
+    def handler(event):
+        is_release = event.type == tk.EventType.ButtonRelease
+        if is_release and pressed[0]:
+            pressed[0] = False
+            return
+        pressed[0] = not is_release
+        action()
+    return handler
+
+
 def _touch_button(parent, text, action, bind=True, **kwargs):
     bg = kwargs.get('bg', 'white')
     fg = kwargs.get('fg', 'black')
@@ -90,9 +104,10 @@ def _touch_button(parent, text, action, bind=True, **kwargs):
     frame._label = label
     frame._touch_action = action
     if bind:
+        on_tap = _tap_handler(action)
         for w in (frame, label):
-            for seq in ('<Button-1>', '<ButtonRelease-1>', '<1>'):
-                w.bind(seq, lambda e, a=action: (a(), 'break')[1])
+            for seq in ('<Button-1>', '<ButtonRelease-1>'):
+                w.bind(seq, lambda e: (on_tap(e), 'break')[1])
     return frame
 
 
@@ -109,7 +124,9 @@ class MessageDisplayApp:
         self._socket = None
         self._msg_queue = deque(maxlen=100)
         self._msg_drain_scheduled = False
+        self._last_message = None
         self._touch_targets = []
+        self._touch_pressed = False
         self._robot_docker_running = False
         self._robot_ros_running = False
         self._robot_busy = False
@@ -149,14 +166,14 @@ class MessageDisplayApp:
 
         self.text_widget = tk.Text(root, bg='black', fg='white', insertbackground='white',
                                    font=('Helvetica', 40), state='disabled', cursor='arrow',
-                                   takefocus=0)
+                                   takefocus=0, wrap='word')
         self.text_widget.grid(row=1, column=0, columnspan=self._toolbar_cols, sticky='nsew', padx=10, pady=10)
         self._msg_font = tkfont.Font(font=self.text_widget['font'])
         self._wrap_pixels = 0
         self.text_widget.bind('<Configure>', lambda e: self._update_wrap_width())
         self.toolbar.lift()
 
-        for seq in ('<Button-1>', '<ButtonRelease-1>', '<1>'):
+        for seq in ('<Button-1>', '<ButtonRelease-1>'):
             root.bind_all(seq, self._global_touch, add='+')
 
         threading.Thread(target=self._socket_server, daemon=True).start()
@@ -189,6 +206,13 @@ class MessageDisplayApp:
         return btn
 
     def _global_touch(self, event):
+        # A tap sends press then release; act on the press and swallow its release.
+        # A lone release still acts, for touch drivers that only deliver releases.
+        is_release = event.type == tk.EventType.ButtonRelease
+        if is_release and self._touch_pressed:
+            self._touch_pressed = False
+            return
+        self._touch_pressed = not is_release
         self.root.update_idletasks()
         x, y = event.x_root, event.y_root
         for btn in self._touch_targets:
@@ -428,11 +452,13 @@ class MessageDisplayApp:
                 if piper in self._speak_procs or aplay in self._speak_procs:
                     self._speak_procs = []
 
-    def _wrap_paragraph(self, paragraph, max_px):
+    def _wrap_paragraph(self, paragraph, max_px, indent_px=0):
+        # indent_px reserves room on the first line for text already on that line.
         parts, line = [], ''
         for word in paragraph.split():
             candidate = (line + ' ' + word).strip()
-            if line and self._msg_font.measure(candidate) > max_px:
+            limit = max_px - (indent_px if not parts else 0)
+            if line and self._msg_font.measure(candidate) > limit:
                 parts.append(line)
                 line = word
             else:
@@ -441,14 +467,17 @@ class MessageDisplayApp:
             parts.append(line)
         return '\n'.join(parts)
 
-    def _wrap_message(self, message):
+    def _wrap_message(self, message, prefix=''):
         if self._wrap_pixels <= 0:
             self._update_wrap_width()
         max_px = self._wrap_pixels or 800
         paragraphs = [p.strip() for p in message.split('\n') if p.strip()]
         if not paragraphs:
             return ''
-        return '\n'.join(self._wrap_paragraph(p, max_px) for p in paragraphs)
+        indent_px = self._msg_font.measure(prefix) if prefix else 0
+        wrapped = [self._wrap_paragraph(paragraphs[0], max_px, indent_px)]
+        wrapped += [self._wrap_paragraph(p, max_px) for p in paragraphs[1:]]
+        return '\n'.join(wrapped)
 
     def _append_text(self, text):
         self.text_widget.config(state='normal')
@@ -462,8 +491,18 @@ class MessageDisplayApp:
         log.info('%s%s', '[speak] ' if speak else '', message)
         if speak:
             self._speak_text(message)
-        self._append_text(self._wrap_message(message))
-        self._append_text('\n\n\n' if message != 'Listening...' else ' ')
+        tw = self.text_widget
+        # Separate from the previous message up front so the view never ends on blank lines.
+        if tw.compare('end-1c', '!=', '1.0'):
+            self._append_text(' ' if self._last_message == 'Listening...' else '\n\n\n')
+        tw.mark_set('msg_start', 'end-1c')
+        tw.mark_gravity('msg_start', 'left')
+        prefix = tw.get('msg_start linestart', 'msg_start')
+        self._append_text(self._wrap_message(message, prefix))
+        self._last_message = message
+        # If the message is taller than the view, keep its first line at the top.
+        if tw.compare('msg_start', '<', '@0,0'):
+            tw.yview('msg_start')
 
     def _enqueue_message(self, message, speak=False):
         self._msg_queue.append((message, speak))
