@@ -77,6 +77,8 @@ if not PIPER_MODEL.is_file():
     log.warning('Piper model not found at %s — run scripts/setup_piper.sh', PIPER_MODEL)
 
 DEFAULT_MESSAGE = 'Hello! I am a mobile robot.\nSay "Hey Robot" to talk to me.'
+# Spoken in place of DEFAULT_MESSAGE; must not contain the wake word or the mics trigger on it.
+DEFAULT_SPOKEN = 'Hello! I am a mobile robot.'
 SHOW_PICTURE_BUTTON = os.environ.get('MATTBOT_SHOW_PICTURE', '0').lower() in ('1', 'true', 'yes')
 
 
@@ -186,7 +188,11 @@ class MessageDisplayApp:
 
     def _show_welcome(self):
         self._update_wrap_width()
-        self._enqueue_message(DEFAULT_MESSAGE, speak=True)
+        self._show_default_message()
+
+    def _show_default_message(self):
+        self._speak_text(DEFAULT_SPOKEN)
+        self._enqueue_message(DEFAULT_MESSAGE)
 
     def _update_wrap_width(self):
         self.root.update_idletasks()
@@ -545,7 +551,7 @@ class MessageDisplayApp:
         self.text_widget.config(state='normal')
         self.text_widget.delete(1.0, tk.END)
         self.text_widget.config(state='disabled')
-        self._enqueue_message(DEFAULT_MESSAGE, speak=True)
+        self._show_default_message()
 
     def chat_action(self):
         log.info('Chat')
