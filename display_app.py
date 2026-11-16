@@ -70,6 +70,10 @@ def _resolve_alsa_device():
 ALSA_DEVICE = _resolve_alsa_device()
 MAX_TEXT_CHARS = 8000
 MAX_SPEAK_CHARS = 500
+MSG_FONT_FAMILY = 'Helvetica'
+MSG_FONT_SIZE = 40
+# Messages too tall for the screen shrink, down to this size, until they fit.
+MIN_MSG_FONT_SIZE = min(MSG_FONT_SIZE, int(os.environ.get('MATTBOT_MIN_FONT_SIZE', '16')))
 
 if not PIPER_BIN.is_file():
     log.warning('Piper binary not found at %s — run scripts/setup_piper.sh', PIPER_BIN)
@@ -167,10 +171,12 @@ class MessageDisplayApp:
         self.exit_button = self._make_button('Exit', self.exit_application, col, **btn_kw)
 
         self.text_widget = tk.Text(root, bg='black', fg='white', insertbackground='white',
-                                   font=('Helvetica', 40), state='disabled', cursor='arrow',
+                                   font=(MSG_FONT_FAMILY, MSG_FONT_SIZE), state='disabled', cursor='arrow',
                                    takefocus=0, wrap='word')
         self.text_widget.grid(row=1, column=0, columnspan=self._toolbar_cols, sticky='nsew', padx=10, pady=10)
-        self._msg_font = tkfont.Font(font=self.text_widget['font'])
+        self._fonts = {}
+        self._font_tag(MSG_FONT_SIZE)
+        self._msg_font = self._fonts[MSG_FONT_SIZE]
         self._wrap_pixels = 0
         self.text_widget.bind('<Configure>', lambda e: self._update_wrap_width())
         self.toolbar.lift()
@@ -458,13 +464,13 @@ class MessageDisplayApp:
                 if piper in self._speak_procs or aplay in self._speak_procs:
                     self._speak_procs = []
 
-    def _wrap_paragraph(self, paragraph, max_px, indent_px=0):
+    def _wrap_paragraph(self, paragraph, max_px, font, indent_px=0):
         # indent_px reserves room on the first line for text already on that line.
         parts, line = [], ''
         for word in paragraph.split():
             candidate = (line + ' ' + word).strip()
             limit = max_px - (indent_px if not parts else 0)
-            if line and self._msg_font.measure(candidate) > limit:
+            if line and font.measure(candidate) > limit:
                 parts.append(line)
                 line = word
             else:
@@ -473,21 +479,46 @@ class MessageDisplayApp:
             parts.append(line)
         return '\n'.join(parts)
 
-    def _wrap_message(self, message, prefix=''):
+    def _wrap_message(self, message, font, indent_px=0):
         if self._wrap_pixels <= 0:
             self._update_wrap_width()
         max_px = self._wrap_pixels or 800
         paragraphs = [p.strip() for p in message.split('\n') if p.strip()]
         if not paragraphs:
             return ''
-        indent_px = self._msg_font.measure(prefix) if prefix else 0
-        wrapped = [self._wrap_paragraph(paragraphs[0], max_px, indent_px)]
-        wrapped += [self._wrap_paragraph(p, max_px) for p in paragraphs[1:]]
+        wrapped = [self._wrap_paragraph(paragraphs[0], max_px, font, indent_px)]
+        wrapped += [self._wrap_paragraph(p, max_px, font) for p in paragraphs[1:]]
         return '\n'.join(wrapped)
 
-    def _append_text(self, text):
+    def _font_tag(self, size):
+        tag = f'size{size}'
+        if size not in self._fonts:
+            self._fonts[size] = tkfont.Font(family=MSG_FONT_FAMILY, size=size)
+            self.text_widget.tag_configure(tag, font=self._fonts[size])
+        return tag
+
+    def _view_height(self):
+        tw = self.text_widget
+        inset = int(tw['borderwidth']) + int(tw['highlightthickness']) + int(tw['pady'])
+        return tw.winfo_height() - 2 * inset
+
+    def _fit_message(self, message, indent_px=0):
+        """Return (wrapped text, font size) for the largest size whose text fits the view."""
+        height = self._view_height()
+        for size in range(MSG_FONT_SIZE, MIN_MSG_FONT_SIZE - 1, -2):
+            self._font_tag(size)
+            font = self._fonts[size]
+            wrapped = self._wrap_message(message, font, indent_px)
+            lines = wrapped.count('\n') + 1
+            # A first line shared with default-size text is as tall as that text.
+            extra = max(0, self._msg_font.metrics('linespace') - font.metrics('linespace')) if indent_px else 0
+            if height <= 1 or lines * font.metrics('linespace') + extra <= height:
+                return wrapped, size
+        return wrapped, size
+
+    def _append_text(self, text, tag=()):
         self.text_widget.config(state='normal')
-        self.text_widget.insert(tk.END, text)
+        self.text_widget.insert(tk.END, text, tag)
         if len(self.text_widget.get('1.0', tk.END)) > MAX_TEXT_CHARS:
             self.text_widget.delete('1.0', 'end-4000c')
         self.text_widget.see(tk.END)
@@ -504,7 +535,9 @@ class MessageDisplayApp:
         tw.mark_set('msg_start', 'end-1c')
         tw.mark_gravity('msg_start', 'left')
         prefix = tw.get('msg_start linestart', 'msg_start')
-        self._append_text(self._wrap_message(message, prefix))
+        indent_px = self._msg_font.measure(prefix) if prefix else 0
+        wrapped, size = self._fit_message(message, indent_px)
+        self._append_text(wrapped, self._font_tag(size))
         self._last_message = message
         # If the message is taller than the view, keep its first line at the top.
         if tw.compare('msg_start', '<', '@0,0'):
